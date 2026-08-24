@@ -1,6 +1,6 @@
 # InstPlot Lite status
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 
 ## Overall objective
 
@@ -124,21 +124,26 @@ exportable derived columns, preserve NaN/Inf positions, and can be undone and
 redone. The denoising implementation reuses fixed convolution weights in the
 interior rather than fitting a new polynomial for every row.
 
-The current macOS arm64 application bundle and DMG have been built locally. The
-DMG is 3,451,919 bytes (3.29 MiB); its plist, ad-hoc signature, checksum, bundled
-import check, mounted-volume execution, and GUI launch all passed. It is a local
-test artifact, not yet a publicly distributable notarized release.
+The complete source history is merged into `main`. GitHub CI has built and
+validated the Windows x64 installer, macOS arm64 and x86_64 DMGs, Linux amd64
+DEB, and Linux x86_64 portable archive. The Windows installer completed silent
+install, bundled importer execution, and uninstall; the Linux DEB completed the
+same installation lifecycle; both DMGs passed structure, checksum, bundled
+import, and disk-image verification.
 
-Windows and Linux build execution remains pending until the workflow is run in
-GitHub CI. Mouse interaction still needs a later hands-on user-session check,
-but the import-to-PNG path can now be verified remotely through the built-in
-smoke arguments.
+The five artifacts are published as the
+[v0.1.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.1.0).
+The release is intentionally marked as a prerelease because macOS Developer ID
+signing/notarization and Windows Authenticode signing require owner-provided
+developer certificates. Mouse interaction still benefits from a final
+hands-on user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-Finish release validation and signing. In order:
+The functional and unsigned-distribution scope for v0.1 is complete. Remaining
+promotion work requires release-owner credentials or hands-on devices:
 
-1. Commit the Lite sources and run the new native packaging workflow.
-2. Resolve any Windows Setup EXE or Linux DEB runner differences.
-3. Configure Apple Developer ID, notarization, and Windows code signing.
-4. Complete clean-machine installation and launch verification.
+1. Configure Apple Developer ID signing and notarization.
+2. Configure Windows Authenticode signing.
+3. Perform the final mouse-interaction check on clean user machines.
+4. Rebuild signed packages and promote the prerelease to a stable release.

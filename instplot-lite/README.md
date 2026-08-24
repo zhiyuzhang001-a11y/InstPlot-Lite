@@ -15,10 +15,21 @@ cargo test
 cargo build --release
 ```
 
-End users will receive native installers and will not need Rust, Cargo, Python,
-or a terminal. Local packaging is implemented for macOS DMG, Windows Setup EXE,
-Linux DEB, and a Linux portable archive. Installers are not published or signed
-yet; this repository is currently the development build.
+## Download
+
+The [v0.1.0 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.1.0)
+provides native installers for Windows x64, Apple Silicon and Intel Macs, and
+Linux x64. End users do not need Rust, Cargo, Python, or a terminal.
+
+- Windows 10/11: download and run the Setup EXE.
+- macOS: download the DMG matching the Mac processor, open it, and drag
+  **InstPlot Lite** to Applications.
+- Debian/Ubuntu: download and open the DEB with the graphical package manager.
+- Other compatible x64 Linux systems: use the portable tar archive.
+
+The preview packages are not yet signed with Apple and Microsoft developer
+certificates, so macOS Gatekeeper or Windows SmartScreen may display a warning
+on first launch. Checksums are published with the release notes.
 
 ## Current workflow
 
@@ -29,9 +40,9 @@ yet; this repository is currently the development build.
 - Choose the numeric X and Y columns; curves default to same-color lines with
   clearly visible point markers.
 - Use the wheel to zoom and right-button drag to pan.
-- Short left-click selects the nearest point for confirmed deletion; left-drag
-  selects a rectangle. The selected point appears as `(x, y)` at the bottom of
-  the window. Use the toolbar or Command/Ctrl+Z to undo.
+- A short left-click shows `(x, y)` at the bottom of the window. Near a data
+  point it snaps to the point and requests deletion confirmation; left-drag
+  selects a rectangle. Use the toolbar or Command/Ctrl+Z to undo.
 - Click **数据处理** for the reference application's center,
   center-then-normalize, polynomial background removal, local flattening, and
   Savitzky–Golay denoising operations in a movable native tool window.
