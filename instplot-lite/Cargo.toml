@@ -1,0 +1,22 @@
+[package]
+name = "instplot-lite"
+version = "0.1.0"
+edition = "2024"
+description = "A lightweight native data plotting and point-editing tool"
+license = "MIT"
+
+[dependencies]
+chardetng = "1.0.0"
+csv = "1.4.0"
+eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_plot = "0.37.0"
+encoding_rs = "0.8.35"
+png = "0.18.0"
+rfd = "0.17.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

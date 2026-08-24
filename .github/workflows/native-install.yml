@@ -1,0 +1,243 @@
+name: Native install matrix
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release metadata and lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up CPython 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify documentation and reproducible lock
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.12.5
+          python scripts/verify_release.py --check-docs --check-lock
+
+      - name: Build end-user installer archives
+        run: python scripts/build_release_archives.py
+
+      - name: Upload end-user installer archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: InstPlot-installers
+          path: dist/*
+          if-no-files-found: error
+
+  install:
+    name: Install / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      INSTPLOT_INSTALL_ONLY: "1"
+      PYTHONUTF8: "1"
+      PYTHONWARNINGS: error
+      QT_QPA_PLATFORM: offscreen
+      INSTPLOT_FORCE_UV_BOOTSTRAP: "1"
+      UV_PYTHON_PREFERENCE: only-managed
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up CPython 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install Linux GUI runtime prerequisite
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1
+
+      - name: First install through Linux entrypoint
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./install_linux.sh
+
+      - name: First install through macOS entrypoint
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./install_macos.command
+
+      - name: First install through Windows entrypoint
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call install_windows.bat
+
+      - name: Healthy repeat through Linux entrypoint
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./install_linux.sh
+
+      - name: Healthy repeat through macOS entrypoint
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./install_macos.command
+
+      - name: Healthy repeat through Windows entrypoint
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call install_windows.bat
+
+      - name: Verify generated user launcher
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            $launcher = Join-Path ([Environment]::GetFolderPath("Desktop")) "InstPlot.lnk"
+          } elseif ($IsMacOS) {
+            $launcher = Join-Path $HOME "Desktop/InstPlot.command"
+          } else {
+            $launcher = Join-Path $HOME ".local/share/applications/InstPlot.desktop"
+          }
+          if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+            throw "Generated user launcher not found: $launcher"
+          }
+          Write-Host "Generated user launcher: $launcher"
+
+      - name: Remove one dependency on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: .venv/bin/python -m pip uninstall -y chardet
+
+      - name: Remove one dependency on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m pip uninstall -y chardet
+
+      - name: Prove repair gate on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python scripts/install.py --json | tee repair-state.json
+          grep '"state": "repair-needed"' repair-state.json
+          if python scripts/install.py --apply --json; then
+            echo "unhealthy apply unexpectedly succeeded"
+            exit 1
+          fi
+
+      - name: Prove repair gate on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python scripts/install.py --json | Tee-Object -FilePath repair-state.json
+          if (-not (Select-String -Path repair-state.json -Pattern '"state": "repair-needed"')) {
+            throw "repair-needed state was not reported"
+          }
+          $result = Start-Process -FilePath python -ArgumentList @(
+            "scripts/install.py", "--apply", "--json"
+          ) -NoNewWindow -Wait -PassThru
+          if ($result.ExitCode -eq 0) {
+            throw "unhealthy apply unexpectedly succeeded"
+          }
+
+      - name: Repair through Linux entrypoint
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./install_linux.sh --repair
+
+      - name: Repair through macOS entrypoint
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./install_macos.command --repair
+
+      - name: Repair through Windows entrypoint
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call install_windows.bat --repair
+
+      - name: Measure Essentials versus full PySide6 footprint
+        shell: pwsh
+        run: python scripts/verify_release.py --measure-full-pyside .venv
+
+      - name: Verify installed runtime and tests on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          .venv/bin/python -m pip check
+          .venv/bin/python -I scripts/verify_install.py --json
+          .venv/bin/python -m pip install pytest==8.4.2
+          .venv/bin/python -m pytest -q
+
+      - name: Verify installed runtime and tests on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip check
+          .\.venv\Scripts\python.exe -I scripts\verify_install.py --json
+          .\.venv\Scripts\python.exe -m pip install pytest==8.4.2
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Show installer log after failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $latest = Get-ChildItem .install-logs -Filter *.log -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime |
+            Select-Object -Last 1
+          if ($latest) {
+            Write-Host "Installer log: $($latest.FullName)"
+            Get-Content $latest.FullName
+          } else {
+            Write-Host "No installer log was created."
+          }
+
+  python-compatibility:
+    name: Python ${{ matrix.python-version }} compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    env:
+      PYTHONUTF8: "1"
+      PYTHONWARNINGS: error
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up compatible CPython
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install Linux GUI runtime prerequisite
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1
+
+      - name: Install locked runtime and tests
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+          python -m pip install --disable-pip-version-check --no-deps .
+          python -m pip install --disable-pip-version-check pytest==8.4.2 "tomli==2.2.1; python_version < '3.11'"
+          python -m pip check
+          python -I scripts/verify_install.py --json
+          python -m pytest -q

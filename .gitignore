@@ -25,6 +25,12 @@ venv/
 ENV/
 env/
 .venv
+.install-logs/
+.installer/
+dist/
+run_instplot.bat
+run_instplot.command
+run_instplot.sh
 
 # IDE和编辑器
 .vscode/
@@ -60,6 +66,7 @@ Thumbs.db
 # Measurement / data files
 data/
 *.csv
+!instplot-lite/tests/fixtures/*.csv
 *.txt.bak
 
 # Jupyter
@@ -70,3 +77,6 @@ data/
 
 # Qt
 *.qmlc
+
+# InstPlot Lite (Rust)
+instplot-lite/target/

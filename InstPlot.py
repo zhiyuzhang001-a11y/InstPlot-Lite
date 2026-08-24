@@ -1,12 +1,11 @@
 import sys
 import os
 import re
-import copy
+import logging
 from datetime import datetime
 import numpy as np
 import pandas as pd
 import unicodedata
-from io import StringIO
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QComboBox,
@@ -20,12 +19,66 @@ from PySide6.QtCore import Qt, QSize, QTimer
 import shutil
 import contextlib
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Rectangle
-from scipy.signal import savgol_filter
+from instplot_io import (
+    DataIOError,
+    ExportSource,
+    FittedCurve,
+    prepare_export,
+    read_data_file,
+    write_export,
+)
+from instplot_history import (
+    ColumnPatchCommand,
+    CompositeCommand,
+    DeleteFilesCommand,
+    DeleteRowsCommand,
+    HistoryError,
+    HistoryManager,
+)
+from instplot_fitting import FitError, fit_values
+from instplot_diagnostics import configure_logging, make_exception_hook
+from instplot_dialogs import (
+    choose_existing_file_mode,
+    choose_export_columns,
+    create_dialog_buttons,
+    create_file_selection_table,
+    show_error_details,
+)
+from instplot_processing import (
+    ProcessingError,
+    center_values,
+    denoise_values,
+    local_flatten_values,
+    normalize_values,
+    remove_polynomial_background,
+)
+from instplot_rendering import InteractiveDrawScheduler
+from instplot_tasks import TaskController
 
 # 仅在首次绘图时初始化 matplotlib 样式
 _mpl_style_initialized = False
+_available_font_names = None
+ASYNC_FIT_POINT_THRESHOLD = 250_000
+LOGGER = logging.getLogger("instplot")
+
+
+def _font_families(primary, available=None):
+    """Return installed named fallbacks plus a quiet generic fallback."""
+    global _available_font_names
+    if available is None:
+        if _available_font_names is None:
+            _available_font_names = {entry.name for entry in font_manager.fontManager.ttflist}
+        available = _available_font_names
+    families = []
+    for family in (primary, "Heiti TC", "SimHei"):
+        if family in available and family not in families:
+            families.append(family)
+    families.append("sans-serif")
+    return families
+
 
 def _initialize_mpl_style():
     """延迟初始化 matplotlib 样式，仅在首次绘图时调用"""
@@ -46,7 +99,7 @@ def _initialize_mpl_style():
         'text.usetex': False,
 
         # 主字体：Times New Roman（serif）
-        'font.family': ['Times New Roman', 'Heiti TC', 'SimHei'],
+        'font.family': _font_families('Times New Roman'),
 
         # mathtext
         'mathtext.fontset': 'cm',
@@ -286,7 +339,6 @@ class PlotApp(QMainWindow):
         )
         
         self.setAcceptDrops(True)
-        self.history = []  # 保存每次操作前的 loaded_files 状态，用于撤回
         self.max_history = 10  # 最多保存 10 步历史
         
         # 去噪参数记忆
@@ -370,6 +422,7 @@ class PlotApp(QMainWindow):
         self.toolbar.addAction(make_action("fa5s.save", "导出数据", self.export_data))
         self.toolbar.addAction(make_action("fa5s.image", "保存图片", self.save_figure))
         self.toolbar.addAction(make_action("fa5s.undo", "撤回", self.undo))
+        self.toolbar.addAction(make_action("fa5s.redo", "重做", self.redo))
         self.toolbar.addAction(make_action("fa5s.edit", "输入数据", self.open_input_dialog))
         self.toolbar.addAction(make_action("fa5s.chart-line", "拟合曲线", self.open_fit_dialog))
         self.toolbar.addAction(make_action("fa5s.sliders-h", "图例设置", self.open_legend_config))
@@ -383,6 +436,7 @@ class PlotApp(QMainWindow):
         self.figure = Figure(figsize=(7.0, 7.0), dpi=100, facecolor='white')
         self.ax = self.figure.add_subplot(111, facecolor='white')
         self.canvas = SquareFigureCanvas(self.figure)
+        self.interactive_draws = InteractiveDrawScheduler(self.canvas.draw_idle, self)
         # 固定 canvas 显示尺寸，不随窗口拉伸
         #self.canvas.setFixedSize(int(7.5 * 100), int(7.0 * 100))  # dpi=100
 
@@ -471,6 +525,8 @@ class PlotApp(QMainWindow):
 
         # 数据存储
         self.loaded_files = []  # 存储 (file_path, df)
+        self.history = HistoryManager(self.loaded_files, max_steps=self.max_history)
+        self.tasks = TaskController(self, max_threads=1)
         self.col_unicode_map = {}
         self.last_x_col = ""
         self.last_y_col = ""
@@ -680,8 +736,8 @@ class PlotApp(QMainWindow):
                     if min_dist_pix <= tol_pixels and (nearest_dist is None or min_dist_pix < nearest_dist):
                         nearest_dist = min_dist_pix
                         nearest = (xs_v[min_idx], ys_v[min_idx])
-                        orig_indices = df[valid_mask].index.to_numpy()
-                        nearest_info = (fi, int(orig_indices[min_idx]))
+                        valid_positions = np.flatnonzero(valid_mask.to_numpy())
+                        nearest_info = (fi, int(valid_positions[min_idx]))
                 else:
                     # 如果没有像素坐标，回退到数据坐标距离
                     dx = xs_v - x
@@ -692,8 +748,8 @@ class PlotApp(QMainWindow):
                     if nearest_dist is None or min_dist < nearest_dist:
                         nearest_dist = min_dist
                         nearest = (xs_v[min_idx], ys_v[min_idx])
-                        orig_indices = df[valid_mask].index.to_numpy()
-                        nearest_info = (fi, int(orig_indices[min_idx]))
+                        valid_positions = np.flatnonzero(valid_mask.to_numpy())
+                        nearest_info = (fi, int(valid_positions[min_idx]))
             except Exception:
                 continue
 
@@ -723,21 +779,10 @@ class PlotApp(QMainWindow):
             mb.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
             ret = mb.exec()
             if ret == QMessageBox.Yes:
-                # 记录历史以便撤回
-                try:
-                    self.history.append(copy.deepcopy(self.loaded_files))
-                    if len(self.history) > self.max_history:
-                        self.history.pop(0)
-                except Exception:
-                    pass
                 # 从对应 DataFrame 删除该行并重绘
                 try:
-                    fi, orig_idx = nearest_info
-                    file_path, df = self.loaded_files[fi]
-                    # 删除行
-                    df = df.drop(index=orig_idx).reset_index(drop=True)
-                    # 更新存储
-                    self.loaded_files[fi] = (file_path, df)
+                    fi, row_position = nearest_info
+                    self._commit_row_deletions({fi: [row_position]})
                     # 删除点后保留当前缩放/平移状态
                     self.replot_all(preserve_view=True)
                     self.statusBar().showMessage(f"已删除点 (x={hx:.4g}, y={hy:.4g})")
@@ -781,6 +826,7 @@ class PlotApp(QMainWindow):
         if event.button == 3:
             self.dragging = False
             self.last_mouse_pos = None
+            self.interactive_draws.flush()
             return
 
         # 左键松开：处理矩形选择结束或单击
@@ -801,6 +847,7 @@ class PlotApp(QMainWindow):
                     pass
                 self._rect_selector = None
                 self._is_selecting = False
+                self.interactive_draws.request()
 
                 if xmin is None:
                     self._mouse_press_pix = None
@@ -825,12 +872,11 @@ class PlotApp(QMainWindow):
                     valid_mask = ~(xs.isna() | ys.isna())
                     if not valid_mask.any():
                         continue
-                    sub = df[valid_mask]
-                    mask_in = (sub[xcol] >= xmin) & (sub[xcol] <= xmax) & (sub[ycol] >= ymin) & (sub[ycol] <= ymax)
+                    mask_in = valid_mask & xs.between(xmin, xmax) & ys.between(ymin, ymax)
                     if mask_in.any():
-                        inds = sub[mask_in].index.to_list()
-                        to_delete[fi] = inds
-                        total_count += len(inds)
+                        positions = np.flatnonzero(mask_in.to_numpy()).tolist()
+                        to_delete[fi] = positions
+                        total_count += len(positions)
 
                 if total_count == 0:
                     self.statusBar().showMessage("矩形内未找到数据点")
@@ -850,16 +896,7 @@ class PlotApp(QMainWindow):
                     ret = mb.exec()
                     if ret == QMessageBox.Yes:
                         try:
-                            self.history.append(copy.deepcopy(self.loaded_files))
-                            if len(self.history) > self.max_history:
-                                self.history.pop(0)
-                        except Exception:
-                            pass
-                        try:
-                            for fi, inds in to_delete.items():
-                                path, df = self.loaded_files[fi]
-                                df = df.drop(index=inds).reset_index(drop=True)
-                                self.loaded_files[fi] = (path, df)
+                            self._commit_row_deletions(to_delete)
                             # 批量删除后保留当前视图范围
                             self.replot_all(preserve_view=True)
                             self.statusBar().showMessage(f"已删除选区内 {total_count} 个点")
@@ -905,7 +942,7 @@ class PlotApp(QMainWindow):
             dy_data = -dy * y_range / height
             ax.set_xlim(xlim[0] + dx_data, xlim[1] + dx_data)
             ax.set_ylim(ylim[0] + dy_data, ylim[1] + dy_data)
-            self.canvas.draw()
+            self.interactive_draws.request()
             self.last_mouse_pos = (event.x, event.y)
             return
 
@@ -942,7 +979,7 @@ class PlotApp(QMainWindow):
                     except Exception:
                         pass
                 try:
-                    self.canvas.draw()
+                    self.interactive_draws.request()
                 except Exception:
                     pass
         except Exception:
@@ -965,7 +1002,7 @@ class PlotApp(QMainWindow):
 
         self.ax.set_xlim([xdata - new_width * relx, xdata + new_width * (1 - relx)])
         self.ax.set_ylim([ydata - new_height * rely, ydata + new_height * (1 - rely)])
-        self.canvas.draw_idle()
+        self.interactive_draws.request()
     
     # 保存图片
     def save_figure(self):
@@ -986,20 +1023,23 @@ class PlotApp(QMainWindow):
     # 打开文件
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择数据文件", "", "Text Files (*.txt *.csv);;All Files (*)"
+            self,
+            "选择数据文件",
+            "",
+            "Data Files (*.txt *.csv *.dat *.xls *.xlsx);;Text Files (*.txt *.csv *.dat);;Excel Files (*.xls *.xlsx);;All Files (*)"
         )
         if file_path:
             if getattr(self, "placeholder_active", False):
                 # 进入真实数据前清空示例
                 self.loaded_files.clear()
+                self.history.reset(self.loaded_files)
                 try:
                     self.combo_x.clear()
                     self.combo_y.clear()
                 except Exception:
                     pass
                 self.placeholder_active = False
-            self.load_file(file_path)
-            self.plot_selected()
+            self.load_file_async(file_path)
 
     def open_input_dialog(self):
         """打开数据输入对话框，支持粘贴/手输并解析为 DataFrame。"""
@@ -1527,9 +1567,11 @@ class PlotApp(QMainWindow):
                 QMessageBox.warning(dlg, "提示", "请选择右侧 Y 列")
                 return
 
+            self.tasks.cancel_all()
             # 清除示例占位
             if getattr(self, "placeholder_active", False):
                 self.loaded_files.clear()
+                self.history.reset(self.loaded_files)
                 try:
                     self.combo_x.clear(); self.combo_y.clear()
                 except Exception:
@@ -1540,6 +1582,7 @@ class PlotApp(QMainWindow):
             self.input_counter += 1
             tag = f"input_data_{self.input_counter}"
             self.loaded_files.append((tag, df))
+            self.history.reset(self.loaded_files)
 
             # 记住列选择，便于下次打开默认选择相同列
             try:
@@ -1754,17 +1797,7 @@ class PlotApp(QMainWindow):
             )
             
             if ret == QMessageBox.Yes:
-                # 保存历史（撤回功能）
-                try:
-                    self.history.append(copy.deepcopy(self.loaded_files))
-                    if len(self.history) > self.max_history:
-                        self.history.pop(0)
-                except Exception:
-                    pass
-                
-                # 从大到小删除索引，避免索引变化问题
-                for file_index in sorted(indices_to_delete, reverse=True):
-                    del self.loaded_files[file_index]
+                self._commit_file_deletions(indices_to_delete)
                 
                 # 如果还有数据，重新绘图；否则清空
                 if self.loaded_files:
@@ -3629,7 +3662,7 @@ class PlotApp(QMainWindow):
             # 设置轴标签（使用 FontProperties：西文优先，中文回退）
             from matplotlib.font_manager import FontProperties
             font_family = self.settings_state.get('fontfamily', 'Helvetica')
-            label_fp = FontProperties(family=[font_family, 'Heiti TC', 'SimHei'], size=self.settings_state['fontsize'])
+            label_fp = FontProperties(family=_font_families(font_family), size=self.settings_state['fontsize'])
             if self.settings_state['xlabel']:
                 preview_ax.set_xlabel(self.settings_state['xlabel'], fontproperties=label_fp, labelpad=self.settings_state.get('xlabel_pad', 3))
             if self.settings_state['ylabel']:
@@ -3665,7 +3698,7 @@ class PlotApp(QMainWindow):
                 from matplotlib.font_manager import FontProperties
                 legend_font = self.settings_state.get('fontfamily', 'Helvetica')
                 # 为了支持中文，传入一个包含常见中文字体的备选列表
-                font_prop = FontProperties(family=[legend_font, 'Heiti TC', 'SimHei'], size=self.settings_state['legend_fontsize'])
+                font_prop = FontProperties(family=_font_families(legend_font), size=self.settings_state['legend_fontsize'])
                 leg = preview_ax.legend(loc=loc, frameon=False, prop=font_prop)
                 
 
@@ -3927,19 +3960,19 @@ class PlotApp(QMainWindow):
                                         return f'-{pi_symbol}'
                                     else:
                                         pi_symbol = r'$\pi$' if use_latex else 'π'
-                                        return f'${num}\pi$' if use_latex else f'{num}π'
+                                        return rf'${num}\pi$' if use_latex else f'{num}π'
                                 else:
                                     if num == 1:
-                                        return f'$\pi/{den}$' if use_latex else f'π/{den}'
+                                        return rf'$\pi/{den}$' if use_latex else f'π/{den}'
                                     elif num == -1:
-                                        return f'$-\pi/{den}$' if use_latex else f'-π/{den}'
+                                        return rf'$-\pi/{den}$' if use_latex else f'-π/{den}'
                                     else:
-                                        return f'${num}\pi/{den}$' if use_latex else f'{num}π/{den}'
+                                        return rf'${num}\pi/{den}$' if use_latex else f'{num}π/{den}'
                         except Exception:
                             pass
                         
                         # 如果分数转换失败，显示小数倍数
-                        return f'${n:.2g}\pi$' if use_latex else f'{n:.2g}π'
+                        return rf'${n:.2g}\pi$' if use_latex else f'{n:.2g}π'
                     
                     # 存储π刻度信息，稍后应用
                     radian_tick_info = (x_ticks, fmt_pi)
@@ -4165,6 +4198,47 @@ class PlotApp(QMainWindow):
         layout.addLayout(btn_layout)
 
         fit_result = {"params": None, "r2": None, "equation": None, "x_fit": None, "y_fit": None, "unit_convert": None}
+        fit_task = {"id": None}
+
+        def publish_fit(result, point_count, unit_convert):
+            fit_task["id"] = None
+            try:
+                fit_result["equation"] = result.equation
+                fit_result["r2"] = result.r2
+                fit_result["x_fit"] = result.x_fit
+                fit_result["y_fit"] = result.y_fit
+                fit_result["unit_convert"] = unit_convert
+                result_label.setText(
+                    f"拟合方程：{result.equation}\n\nR² = {result.r2:.6f}\n\n点数: {point_count}"
+                )
+                btn_apply.setEnabled(True)
+                btn_fit.setEnabled(True)
+            except RuntimeError:
+                # 对话框可能已在后台拟合结束前关闭。
+                pass
+
+        def show_fit_error(error, fit_method):
+            fit_task["id"] = None
+            LOGGER.warning("fit_failed method=%s error=%s", fit_method, error)
+            if isinstance(error, FitError) and error.code == "invalid_domain" and fit_method.startswith("对数"):
+                message = "对数拟合要求所有 x > 0"
+            elif isinstance(error, FitError) and error.code == "invalid_domain" and fit_method.startswith("幂函数"):
+                message = "幂函数拟合要求所有 x, y > 0"
+            else:
+                message = f"拟合过程出错: {error}"
+            try:
+                btn_fit.setEnabled(True)
+                QMessageBox.critical(dlg, "拟合失败", message)
+            except RuntimeError:
+                pass
+
+        def show_fit_cancelled():
+            fit_task["id"] = None
+            try:
+                btn_fit.setEnabled(True)
+                result_label.setText("拟合已取消")
+            except RuntimeError:
+                pass
 
         def perform_fit():
             # 解析过滤范围
@@ -4232,182 +4306,54 @@ class PlotApp(QMainWindow):
             ys_all = np.array(ys_all)
             
             fit_method = fit_type.currentText()
+            method_names = {
+                "多项式": "polynomial",
+                "指数 (y=a*exp(b*x))": "exponential",
+                "对数 (y=a*log(x)+b)": "logarithmic",
+                "幂函数 (y=a*x^b)": "power",
+                "自定义函数": "custom",
+            }
+            fit_kwargs = {"degree": degree_spin.value()}
+            if fit_method == "自定义函数":
+                expression = custom_func_edit.text().strip()
+                if not expression:
+                    QMessageBox.warning(dlg, "提示", "请输入自定义函数表达式")
+                    return
+                try:
+                    initial = [
+                        float(value.strip())
+                        for value in init_params_edit.text().split(",")
+                        if value.strip()
+                    ] or [1.0, 1.0, 1.0]
+                except ValueError:
+                    QMessageBox.warning(dlg, "提示", "初始参数格式错误，应为逗号分隔的数字")
+                    return
+                fit_kwargs.update(expression=expression, initial_parameters=initial)
+            if len(xs_all) >= ASYNC_FIT_POINT_THRESHOLD:
+                btn_fit.setEnabled(False)
+                btn_apply.setEnabled(False)
+                result_label.setText(f"正在后台拟合 {len(xs_all)} 个数据点…")
+                task_kwargs = dict(fit_kwargs)
+                fit_task["id"] = self.tasks.submit(
+                    lambda token: fit_values(
+                        xs_all,
+                        ys_all,
+                        method_names[fit_method],
+                        cancel_check=token.raise_if_cancelled,
+                        **task_kwargs,
+                    ),
+                    on_success=lambda result: publish_fit(result, len(xs_all), unit_convert),
+                    on_failure=lambda error: show_fit_error(error, fit_method),
+                    on_cancelled=show_fit_cancelled,
+                )
+                return
+
             try:
-                if fit_method == "多项式":
-                    degree = degree_spin.value()
-                    coeffs = np.polyfit(xs_all, ys_all, degree)
-                    poly = np.poly1d(coeffs)
-                    y_pred = poly(xs_all)
-                    
-                    # 生成方程字符串
-                    terms = []
-                    for i, c in enumerate(coeffs):
-                        power = degree - i
-                        if abs(c) < 1e-10:
-                            continue
-                        if power == 0:
-                            terms.append(f"{c:.4g}")
-                        elif power == 1:
-                            terms.append(f"{c:.4g}*x")
-                        else:
-                            terms.append(f"{c:.4g}*x^{power}")
-                    equation = "y = " + " + ".join(terms).replace("+ -", "- ")
-                    
-                    # 生成拟合曲线
-                    x_min, x_max = xs_all.min(), xs_all.max()
-                    x_fit = np.linspace(x_min, x_max, 500)
-                    y_fit = poly(x_fit)
-                    
-                elif fit_method == "指数 (y=a*exp(b*x))":
-                    from scipy.optimize import curve_fit
-                    def exp_func(x, a, b):
-                        return a * np.exp(b * x)
-                    try:
-                        popt, _ = curve_fit(exp_func, xs_all, ys_all, maxfev=5000)
-                        y_pred = exp_func(xs_all, *popt)
-                        equation = f"y = {popt[0]:.4g} * exp({popt[1]:.4g} * x)"
-                        x_min, x_max = xs_all.min(), xs_all.max()
-                        x_fit = np.linspace(x_min, x_max, 500)
-                        y_fit = exp_func(x_fit, *popt)
-                    except Exception as e:
-                        QMessageBox.critical(dlg, "拟合失败", f"指数拟合失败: {e}")
-                        return
-                        
-                elif fit_method == "对数 (y=a*log(x)+b)":
-                    if np.any(xs_all <= 0):
-                        QMessageBox.warning(dlg, "提示", "对数拟合要求所有 x > 0")
-                        return
-                    from scipy.optimize import curve_fit
-                    def log_func(x, a, b):
-                        return a * np.log(x) + b
-                    try:
-                        popt, _ = curve_fit(log_func, xs_all, ys_all, maxfev=5000)
-                        y_pred = log_func(xs_all, *popt)
-                        equation = f"y = {popt[0]:.4g} * log(x) + {popt[1]:.4g}"
-                        x_min, x_max = xs_all.min(), xs_all.max()
-                        x_fit = np.linspace(max(x_min, 1e-10), x_max, 500)
-                        y_fit = log_func(x_fit, *popt)
-                    except Exception as e:
-                        QMessageBox.critical(dlg, "拟合失败", f"对数拟合失败: {e}")
-                        return
-                        
-                elif fit_method == "幂函数 (y=a*x^b)":
-                    if np.any(xs_all <= 0) or np.any(ys_all <= 0):
-                        QMessageBox.warning(dlg, "提示", "幂函数拟合要求所有 x, y > 0")
-                        return
-                    from scipy.optimize import curve_fit
-                    def power_func(x, a, b):
-                        return a * np.power(x, b)
-                    try:
-                        popt, _ = curve_fit(power_func, xs_all, ys_all, maxfev=5000)
-                        y_pred = power_func(xs_all, *popt)
-                        equation = f"y = {popt[0]:.4g} * x^{popt[1]:.4g}"
-                        x_min, x_max = xs_all.min(), xs_all.max()
-                        x_fit = np.linspace(max(x_min, 1e-10), x_max, 500)
-                        y_fit = power_func(x_fit, *popt)
-                    except Exception as e:
-                        QMessageBox.critical(dlg, "拟合失败", f"幂函数拟合失败: {e}")
-                        return
-                
-                elif fit_method == "自定义函数":
-                    expr = custom_func_edit.text().strip()
-                    if not expr:
-                        QMessageBox.warning(dlg, "提示", "请输入自定义函数表达式")
-                        return
-                    expr = expr.replace("^", "**")
-                    
-                    # 解析初始参数
-                    init_str = init_params_edit.text().strip()
-                    try:
-                        p0 = [float(p.strip()) for p in init_str.split(",") if p.strip()]
-                        if not p0:
-                            p0 = [1.0] * 3  # 默认3个参数
-                    except Exception:
-                        QMessageBox.warning(dlg, "提示", "初始参数格式错误，应为逗号分隔的数字")
-                        return
-                    
-                    # 安全解析用户函数
-                    import ast
-                    allowed_funcs = {
-                        'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
-                        'sinh': np.sinh, 'cosh': np.cosh, 'tanh': np.tanh,
-                        'exp': np.exp, 'log': np.log, 'log10': np.log10,
-                        'sqrt': np.sqrt, 'abs': np.abs,
-                        'arctan': np.arctan, 'arctan2': np.arctan2,
-                        'pi': np.pi, 'e': np.e
-                    }
-                    allowed_nodes = (
-                        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Load,
-                        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
-                        ast.USub, ast.UAdd,
-                        ast.Constant, ast.Name
-                    )
-                    
-                    try:
-                        tree = ast.parse(expr, mode='eval')
-                        for node in ast.walk(tree):
-                            if not isinstance(node, allowed_nodes):
-                                raise ValueError("包含不支持的语法元素")
-                            if isinstance(node, ast.Name):
-                                if node.id not in allowed_funcs and node.id not in ['x', 'a', 'b', 'c', 'd', 'e_param', 'f', 'g', 'h']:
-                                    raise ValueError(f"不支持的符号: {node.id}")
-                            if isinstance(node, ast.Call):
-                                if not isinstance(node.func, ast.Name):
-                                    raise ValueError("函数调用不合法")
-                                if node.func.id not in allowed_funcs:
-                                    raise ValueError(f"不支持的函数: {node.func.id}")
-                        code_obj = compile(tree, "<expr>", "eval")
-                    except Exception as e:
-                        QMessageBox.critical(dlg, "解析失败", f"函数表达式无效：{e}")
-                        return
-                    
-                    # 创建拟合函数
-                    def custom_fit_func(x, *params):
-                        env = {k: v for k, v in allowed_funcs.items() if callable(v)}
-                        env.update({'pi': np.pi, 'e': np.e, 'x': x})
-                        param_names = ['a', 'b', 'c', 'd', 'e_param', 'f', 'g', 'h']
-                        for i, val in enumerate(params):
-                            if i < len(param_names):
-                                env[param_names[i]] = val
-                        try:
-                            result = eval(code_obj, {"__builtins__": {}}, env)
-                            return np.array(result, dtype=float)
-                        except Exception:
-                            return np.full_like(x, np.nan)
-                    
-                    from scipy.optimize import curve_fit
-                    try:
-                        popt, _ = curve_fit(custom_fit_func, xs_all, ys_all, p0=p0, maxfev=10000)
-                        y_pred = custom_fit_func(xs_all, *popt)
-                        
-                        # 生成方程字符串
-                        param_names = ['a', 'b', 'c', 'd', 'e_param', 'f', 'g', 'h']
-                        param_str = ", ".join([f"{param_names[i]}={popt[i]:.4g}" for i in range(len(popt))])
-                        equation = f"y = {expr}  ({param_str})"
-                        
-                        x_min, x_max = xs_all.min(), xs_all.max()
-                        x_fit = np.linspace(x_min, x_max, 500)
-                        y_fit = custom_fit_func(x_fit, *popt)
-                    except Exception as e:
-                        QMessageBox.critical(dlg, "拟合失败", f"自定义函数拟合失败: {e}")
-                        return
-                
-                # 计算 R²
-                ss_res = np.sum((ys_all - y_pred) ** 2)
-                ss_tot = np.sum((ys_all - np.mean(ys_all)) ** 2)
-                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                
-                fit_result["equation"] = equation
-                fit_result["r2"] = r2
-                fit_result["x_fit"] = x_fit
-                fit_result["y_fit"] = y_fit
-                fit_result["unit_convert"] = unit_convert
-                
-                result_label.setText(f"拟合方程：{equation}\n\nR² = {r2:.6f}\n\n点数: {len(xs_all)}")
-                btn_apply.setEnabled(True)
-                
-            except Exception as e:
-                QMessageBox.critical(dlg, "拟合失败", f"拟合过程出错: {e}")
+                result = fit_values(xs_all, ys_all, method_names[fit_method], **fit_kwargs)
+            except FitError as error:
+                show_fit_error(error, fit_method)
+            else:
+                publish_fit(result, len(xs_all), unit_convert)
 
         def apply_fit():
             if fit_result["x_fit"] is None:
@@ -4479,7 +4425,7 @@ class PlotApp(QMainWindow):
                     # 重新设置图例（使用支持中文的字体属性）
                     from matplotlib.font_manager import FontProperties
                     legend_font = self.settings_state.get('fontfamily', 'Helvetica')
-                    font_prop = FontProperties(family=[legend_font, 'Heiti TC', 'SimHei'], size=fontsize)
+                    font_prop = FontProperties(family=_font_families(legend_font), size=fontsize)
                     if handles and labels:
                         self.ax.legend(handles, labels, fontsize=fontsize, loc=loc_arg, frameon=frameon, framealpha=framealpha, prop=font_prop)
                 else:
@@ -4490,7 +4436,7 @@ class PlotApp(QMainWindow):
                 try:
                     from matplotlib.font_manager import FontProperties
                     legend_font = self.settings_state.get('fontfamily', 'Helvetica')
-                    font_prop = FontProperties(family=[legend_font, 'Heiti TC', 'SimHei'], size=12)
+                    font_prop = FontProperties(family=_font_families(legend_font), size=12)
                     self.ax.legend(prop=font_prop)
                 except Exception:
                     pass
@@ -4502,6 +4448,11 @@ class PlotApp(QMainWindow):
         btn_fit.clicked.connect(perform_fit)
         btn_apply.clicked.connect(apply_fit)
         btn_close.clicked.connect(dlg.close)
+        dlg.finished.connect(
+            lambda _result: self.tasks.cancel(fit_task["id"])
+            if fit_task["id"] is not None
+            else None
+        )
         
         # 类型切换时切换可见控件
         def on_type_change():
@@ -4525,248 +4476,77 @@ class PlotApp(QMainWindow):
             file_path = url.toLocalFile()
             if getattr(self, "placeholder_active", False):
                 self.loaded_files.clear()
+                self.history.reset(self.loaded_files)
                 try:
                     self.combo_x.clear()
                     self.combo_y.clear()
                 except Exception:
                     pass
                 self.placeholder_active = False
-            self.load_file(file_path)
-        # 拖入后自动绘图
-        self.plot_selected()
+            self.load_file_async(file_path)
     
     # 加载文件
+
     def load_file(self, file_path):
-        ext = os.path.splitext(file_path)[1].lower()
-        chosen_sep = None
+        """Load data through the GUI-independent M2 import boundary."""
         try:
-            if ext in [".xls", ".xlsx"]:
-                # 读取 Excel 文件
-                df = pd.read_excel(file_path, header=0)  # 默认第一行作为列名
-                chosen_sep = None  # Excel 不涉及分隔符
-                enc_used = "Excel"
-                
-            else:
-                # 读取文本文件
-                def try_read_text_with_encodings(path, encodings):
-                    for enc_try in encodings:
-                        if not enc_try:
-                            continue
-                        try:
-                            with open(path, 'r', encoding=enc_try) as f:
-                                return f.read(), enc_try
-                        except Exception:
-                            continue
-                    return None, None
-                
-                def find_header_row_index(text):
-                    """
-                    智能识别标签行。
-                    1. 找到第一行纯数字数据
-                    2. 识别其分隔符和列数
-                    3. 向上找到有相同列数的标签行
-                    返回: (标签行索引, 分隔符)
-                    """
-                    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                    if len(lines) < 2:
-                        return 0, None
-                    
-                    def is_numeric_row(line, columns_count=None):
-                        """检查一行是否全是数字（允许NaN和空值），返回 (是否全数字, 分隔符, 列数)"""
-                        # 尝试所有分隔符
-                        sep_candidates = ['\t', ',', ';', r'\s+']
-                        
-                        for sep in sep_candidates:
-                            if sep == r'\s+':
-                                parts = re.split(r'\s+', line.strip())
-                            else:
-                                parts = line.split(sep)
-                            
-                            parts = [p.strip() for p in parts if p.strip()]  # 去掉空部分
-                            
-                            if len(parts) == 0:
-                                continue
-                            
-                            # 检查这一行是否全是数字
-                            is_all_numeric = True
-                            for part in parts:
-                                if part.lower() in ['nan', 'na', 'none', 'inf']:
-                                    continue
-                                try:
-                                    float(part)
-                                except ValueError:
-                                    is_all_numeric = False
-                                    break
-                            
-                            if is_all_numeric:
-                                # 找到一个有效的分隔符和列数
-                                if columns_count is None or len(parts) == columns_count:
-                                    return True, sep, len(parts)
-                        
-                        return False, None, 0
-                    
-                    # 向下找到第一行纯数字数据
-                    data_row_idx = -1
-                    data_sep = None
-                    data_columns = 0
-                    
-                    for i in range(len(lines)):
-                        is_numeric, sep, col_count = is_numeric_row(lines[i])
-                        if is_numeric:
-                            data_row_idx = i
-                            data_sep = sep
-                            data_columns = col_count
-                            break
-                    
-                    if data_row_idx == -1:
-                        # 没找到数字行，返回默认值
-                        return 0, None
-                    
-                    # 向上找标签行：找到一行有相同列数、但不是全数字的行
-                    for i in range(data_row_idx - 1, -1, -1):
-                        line = lines[i]
-                        
-                        # 用数据行的分隔符来分割标签行
-                        if data_sep == r'\s+':
-                            parts = re.split(r'\s+', line.strip())
-                        else:
-                            parts = line.split(data_sep)
-                        
-                        parts = [p.strip() for p in parts if p.strip()]
-                        
-                        # 检查列数是否匹配
-                        if len(parts) == data_columns:
-                            # 检查这行是否包含非数字内容（即可能是标签行）
-                            has_non_numeric = False
-                            for part in parts:
-                                if part.lower() in ['nan', 'na', 'none', 'inf']:
-                                    continue
-                                try:
-                                    float(part)
-                                except ValueError:
-                                    has_non_numeric = True
-                                    break
-                            
-                            if has_non_numeric:
-                                # 找到了标签行
-                                return i, data_sep
-                    
-                    # 如果没找到标签行，直接用数据行前一行
-                    if data_row_idx > 0:
-                        return data_row_idx - 1, data_sep
-                    
-                    return 0, data_sep
-        
-                # 判断是否 VSM 文件（必须是 .dat 扩展名且内容包含 "vsm"）
-                is_vsm = False
-                if ext == '.dat':
-                    with open(file_path, 'r', encoding='ascii', errors='ignore') as f:
-                        preview_lines = [ln.strip() for ln in f.readlines()[:10] if ln.strip()]
-                    is_vsm = any("vsm" in ln.lower() for ln in preview_lines)
+            result = read_data_file(file_path)
+        except DataIOError as error:
+            self._show_import_error(error)
+            return
 
-                if is_vsm:
-                    # VSM 文件固定读取方式
-                    df = pd.read_csv(
-                        file_path,
-                        skiprows=31,       # 跳过头信息
-                        header=None,
-                        usecols=[3, 4]     # Bz 和 emu
-                    )
-                    df.columns = ['B (Oe)', 'M (emu)']
-                    chosen_sep = ','  # 方便状态栏显示
-                    enc_used = "VSM"
+        self._publish_import_result(file_path, result)
 
-                else:
-                # 编码检测
-                    import chardet
-                    with open(file_path, 'rb') as f:
-                        raw = f.read(5000)
-                        detected = chardet.detect(raw)
-                    enc_candidates = [detected.get('encoding'), 'utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'gbk', 'big5', 'mac_roman']
+    def load_file_async(self, file_path):
+        """Read off the GUI thread and publish the completed result on the GUI thread."""
+        self.statusBar().showMessage(f"正在读取文件：{file_path}")
 
-                    text, enc_used = try_read_text_with_encodings(file_path, enc_candidates)
-                    if text is None:
-                        raise ValueError("无法用常见编码读取文件")
-                    
-                    else:
-                        # 智能识别标签行和分隔符
-                        header_idx, detected_sep = find_header_row_index(text)
-                        
-                        # 如果没有检测到分隔符，进行备用分隔符检测
-                        if detected_sep is None:
-                            lines = [ln for ln in text.splitlines() if ln.strip()][:10]
-                            if not lines:
-                                raise ValueError("文件为空或只包含空行")
-                            header_line = lines[0]
-                            data_line = lines[1] if len(lines) > 1 else lines[0]
-                            sep_candidates = ['\t', ',', ';', r'\s+']
-                            for sep in sep_candidates:
-                                try:
-                                    if sep == r'\s+':
-                                        hcols = re.split(r'\s+', header_line.strip())
-                                        dcols = re.split(r'\s+', data_line.strip())
-                                    else:
-                                        hcols = header_line.split(sep)
-                                        dcols = data_line.split(sep)
-                                    if len(hcols) > 1 and abs(len(hcols) - len(dcols)) <= 0:
-                                        detected_sep = sep
-                                        break
-                                except Exception:
-                                    continue
-                        
-                        chosen_sep = detected_sep if detected_sep else '\t'
+        def publish(result):
+            self._publish_import_result(file_path, result)
+            self.plot_selected()
 
-                    if chosen_sep:
-                        df = pd.read_csv(StringIO(text), sep=chosen_sep, engine='python', skiprows=header_idx, header=0)
-                    else:
-                        df = pd.read_fwf(StringIO(text))
-                        chosen_sep = 'fwf'
+        return self.tasks.submit(
+            lambda token: read_data_file(file_path),
+            on_success=publish,
+            on_failure=self._show_import_error,
+            on_cancelled=lambda: self.statusBar().showMessage(f"已取消文件读取：{file_path}"),
+        )
 
-            # 列名清理
-            def clean_col_name(s):
-                s = str(s).strip()
-                s = re.sub(r'\s+', ' ', s)
-                return s
-            df.columns = [clean_col_name(c) for c in df.columns]
+    def _show_import_error(self, error):
+        self.statusBar().showMessage(f"文件读取失败: {error}")
+        LOGGER.error("import_failed error=%s", error)
 
-            # 修复常见乱码
-            def fix_garbled(s: str) -> str:
-                return (
-                    s.replace('¦È', 'θ')
-                    .replace('¡ã', '°')
-                    .replace('¦¸', 'Ω')
-                    .replace('Â', '')
-                    .strip()
-                )
-            df.columns = [fix_garbled(c) for c in df.columns]
+    def _publish_import_result(self, file_path, result):
+        """Publish an ImportResult; callers must run this method on the GUI thread."""
 
-            # 更新数据存储
-            self.loaded_files.append((file_path, df))
-            self.col_unicode_map.update({col: latex_to_unicode(str(col)) for col in df.columns})
+        df = result.frame
+        self.loaded_files.append((file_path, df))
+        self.history.reset(self.loaded_files)
+        self.col_unicode_map.update({col: latex_to_unicode(str(col)) for col in df.columns})
 
-            # 更新下拉菜单（使用最新文件列名）
-            self.combo_x.clear()
-            self.combo_y.clear()
-            self.combo_x.addItems(df.columns)
-            self.combo_y.addItems(df.columns)
+        self.combo_x.clear()
+        self.combo_y.clear()
+        self.combo_x.addItems(df.columns)
+        self.combo_y.addItems(df.columns)
 
-            # 记录默认列
-            if not self.last_x_col:
-                self.last_x_col = df.columns[0]
-            if not self.last_y_col and len(df.columns) > 1:
-                self.last_y_col = df.columns[1]
-            self.combo_x.setCurrentText(self.last_x_col)
-            self.combo_y.setCurrentText(self.last_y_col)
+        if not self.last_x_col:
+            self.last_x_col = df.columns[0]
+        if not self.last_y_col and len(df.columns) > 1:
+            self.last_y_col = df.columns[1]
+        self.combo_x.setCurrentText(self.last_x_col)
+        self.combo_y.setCurrentText(self.last_y_col)
 
-            # 状态栏
-            self.statusBar().showMessage(f"已加载文件：{file_path} (编码: {enc_used}, 分隔符: {repr(chosen_sep)})")
-            print(f"已加载文件: {file_path}, 编码: {enc_used}, 分隔符: {repr(chosen_sep)}")
-            print("列名:", df.columns.tolist())
-            print(df.head())
-
-        except Exception as e:
-            self.statusBar().showMessage(f"文件读取失败: {e}")
-            print("读取文件错误:", e)
+        self.statusBar().showMessage(
+            f"已加载文件：{file_path} (编码: {result.encoding}, 分隔符: {repr(result.separator)})"
+        )
+        LOGGER.info(
+            "import_succeeded path=%s encoding=%s separator=%r rows=%d columns=%d",
+            file_path,
+            result.encoding,
+            result.separator,
+            len(df),
+            len(df.columns),
+        )
 
     # 绘图
     def plot_selected(self):
@@ -4788,9 +4568,11 @@ class PlotApp(QMainWindow):
 
     # 清空
     def clear_plot(self):
+        self.tasks.cancel_all()
         self.ax.clear()
         self.canvas.draw()
         self.loaded_files.clear()
+        self.history.reset(self.loaded_files)
         # 清空下拉选择并重置记录的列
         try:
             self.combo_x.clear()
@@ -4905,30 +4687,12 @@ class PlotApp(QMainWindow):
         layout.addWidget(info_label)
         
         # 曲线选择表格
-        table = QTableWidget()
-        table.setRowCount(len(self.loaded_files))
-        table.setColumnCount(2)
-        table.setHorizontalHeaderLabels(["选择", "文件名"])
-        table.setColumnWidth(0, 50)
-        table.setColumnWidth(1, 400)
-        
-        # 创建复选框
-        checkboxes = []
-        for i, (path, df) in enumerate(self.loaded_files):
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)  # 默认全选
-            checkboxes.append(checkbox)
-            table.setCellWidget(i, 0, checkbox)
-            table.setItem(i, 1, QTableWidgetItem(os.path.basename(path)))
+        table, checkboxes = create_file_selection_table(self.loaded_files, name_width=400)
         
         layout.addWidget(table)
         
         # 按钮
-        btn_layout = QHBoxLayout()
-        btn_ok = QPushButton("确定")
-        btn_cancel = QPushButton("取消")
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
+        btn_layout, btn_ok, btn_cancel = create_dialog_buttons()
         layout.addLayout(btn_layout)
         
         dlg.setLayout(layout)
@@ -4957,12 +4721,7 @@ class PlotApp(QMainWindow):
                 QMessageBox.warning(dlg, "提示", "x1 必须小于 x2")
                 return
             
-            # 保存当前状态以便撤回
-            self.history.append(copy.deepcopy(self.loaded_files))
-            if len(self.history) > self.max_history:
-                self.history.pop(0)
-            
-            changed = False
+            changes = []
             for i, (file_path, df) in enumerate(self.loaded_files):
                 # 只处理选中的文件
                 if not checkboxes[i].isChecked():
@@ -4972,12 +4731,12 @@ class PlotApp(QMainWindow):
                 if y_col in df.columns:
                     try:
                         # 获取当前行范围过滤的索引
-                        filtered_row_indices = self._get_filtered_rows(df)
+                        row_positions = self._get_filtered_row_positions(df)
                         
                         # 如果有行范围过滤，只处理这些行
-                        if self.row_filter_enabled and len(filtered_row_indices) < len(df):
+                        if self.row_filter_enabled and len(row_positions) < len(df):
                             # 创建要处理的数据的深拷贝
-                            df_to_process = df.loc[filtered_row_indices].copy()
+                            df_to_process = df.iloc[row_positions].copy()
                             
                             # 在拷贝上进行处理
                             if use_range and x_col and x_col in df_to_process.columns:
@@ -4998,13 +4757,12 @@ class PlotApp(QMainWindow):
                                     polyorder=polyorder
                                 )
                             
-                            # 将处理结果更新回原始 df
-                            df.loc[filtered_row_indices, y_col] = df_to_process[y_col].values
-                            print(f"[denoise] applied to {os.path.basename(file_path)} ({y_col}, rows {len(filtered_row_indices)}/{len(df)}), window={window_length}, polyorder={polyorder}")
+                            values = df_to_process[y_col].to_numpy(copy=True)
+                            print(f"[denoise] applied to {os.path.basename(file_path)} ({y_col}, rows {len(row_positions)}/{len(df)}), window={window_length}, polyorder={polyorder}")
                         else:
                             # 如果没有行范围过滤，直接处理整个 df
                             if use_range and x_col and x_col in df.columns:
-                                df[y_col] = denoise_data(
+                                values = denoise_data(
                                     df, 
                                     y_col=y_col, 
                                     window_length=window_length, 
@@ -5015,14 +4773,16 @@ class PlotApp(QMainWindow):
                                 )
                                 print(f"[denoise] applied to {os.path.basename(file_path)} ({y_col}), window={window_length}, polyorder={polyorder}, range=[{x1}, {x2}]")
                             else:
-                                df[y_col] = denoise_data(df, y_col=y_col, window_length=window_length, polyorder=polyorder)
+                                values = denoise_data(df, y_col=y_col, window_length=window_length, polyorder=polyorder)
                                 print(f"[denoise] applied to {os.path.basename(file_path)} ({y_col}), window={window_length}, polyorder={polyorder}")
-                        changed = True
+                            row_positions = list(range(len(df)))
+                        changes.append((i, y_col, row_positions, values))
                     except Exception as e:
                         print(f"[denoise] failed on {file_path}: {e}")
                 else:
                     print(f"[denoise] skip {os.path.basename(file_path)}: no column {y_col}")
             
+            changed = self._commit_column_changes(changes)
             if changed:
                 if use_range:
                     self.statusBar().showMessage(f"去噪完成（列: {y_col}, 窗口: {window_length}, 阶数: {polyorder}, 区间: [{x1}, {x2}]）")
@@ -5146,29 +4906,12 @@ class PlotApp(QMainWindow):
         curve_label = QLabel("选择要处理的曲线：")
         layout.addWidget(curve_label)
         
-        table = QTableWidget()
-        table.setRowCount(len(self.loaded_files))
-        table.setColumnCount(2)
-        table.setHorizontalHeaderLabels(["选择", "文件名"])
-        table.setColumnWidth(0, 50)
-        table.setColumnWidth(1, 450)
-        
-        checkboxes = []
-        for i, (path, df) in enumerate(self.loaded_files):
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)
-            checkboxes.append(checkbox)
-            table.setCellWidget(i, 0, checkbox)
-            table.setItem(i, 1, QTableWidgetItem(os.path.basename(path)))
+        table, checkboxes = create_file_selection_table(self.loaded_files, name_width=450)
         
         layout.addWidget(table)
         
         # 按钮
-        btn_layout = QHBoxLayout()
-        btn_ok = QPushButton("确定")
-        btn_cancel = QPushButton("取消")
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
+        btn_layout, btn_ok, btn_cancel = create_dialog_buttons()
         layout.addLayout(btn_layout)
         
         dlg.setLayout(layout)
@@ -5190,12 +4933,7 @@ class PlotApp(QMainWindow):
                 QMessageBox.warning(dlg, "提示", "请至少选择一个曲线进行处理")
                 return
             
-            # 保存当前状态以便撤回
-            self.history.append(copy.deepcopy(self.loaded_files))
-            if len(self.history) > self.max_history:
-                self.history.pop(0)
-            
-            changed = False
+            changes = []
             for i, (file_path, df) in enumerate(self.loaded_files):
                 if not checkboxes[i].isChecked():
                     print(f"[local_flatten] skip {os.path.basename(file_path)} (未选中)")
@@ -5207,12 +4945,12 @@ class PlotApp(QMainWindow):
                 
                 try:
                     # 获取当前行范围过滤的索引
-                    filtered_row_indices = self._get_filtered_rows(df)
+                    row_positions = self._get_filtered_row_positions(df)
                     
                     # 如果有行范围过滤，只处理这些行
-                    if self.row_filter_enabled and len(filtered_row_indices) < len(df):
+                    if self.row_filter_enabled and len(row_positions) < len(df):
                         # 创建要处理的数据的深拷贝
-                        df_to_process = df.loc[filtered_row_indices].copy()
+                        df_to_process = df.iloc[row_positions].copy()
                         
                         # 在拷贝上进行处理
                         df_to_process[y_col] = local_flatten_keep_anchor(
@@ -5224,12 +4962,11 @@ class PlotApp(QMainWindow):
                             strength=strength
                         )
                         
-                        # 将处理结果更新回原始 df
-                        df.loc[filtered_row_indices, y_col] = df_to_process[y_col].values
-                        print(f"[local_flatten] applied to {os.path.basename(file_path)} (rows {len(filtered_row_indices)}/{len(df)}), x1={x1}, x2={x2}, transition={transition}, anchor={anchor}, strength={strength}")
+                        values = df_to_process[y_col].to_numpy(copy=True)
+                        print(f"[local_flatten] applied to {os.path.basename(file_path)} (rows {len(row_positions)}/{len(df)}), x1={x1}, x2={x2}, transition={transition}, anchor={anchor}, strength={strength}")
                     else:
                         # 如果没有行范围过滤，直接处理整个 df
-                        df[y_col] = local_flatten_keep_anchor(
+                        values = local_flatten_keep_anchor(
                             df[x_col].values,
                             df[y_col].values,
                             x1, x2,
@@ -5238,10 +4975,12 @@ class PlotApp(QMainWindow):
                             strength=strength
                         )
                         print(f"[local_flatten] applied to {os.path.basename(file_path)}, x1={x1}, x2={x2}, transition={transition}, anchor={anchor}, strength={strength}")
-                    changed = True
+                        row_positions = list(range(len(df)))
+                    changes.append((i, y_col, row_positions, values))
                 except Exception as e:
                     print(f"[local_flatten] failed on {file_path}: {e}")
             
+            changed = self._commit_column_changes(changes)
             if changed:
                 self.statusBar().showMessage(f"局部处理完成 (x1={x1}, x2={x2}, transition={transition}, anchor={anchor}, strength={strength})")
                 self.replot_all()
@@ -5426,6 +5165,23 @@ class PlotApp(QMainWindow):
         else:
             return df.index
 
+    def _get_filtered_row_positions(self, df):
+        total_rows = len(df)
+        if not self.row_filter_enabled or self.row_filter_mode == 'all':
+            return list(range(total_rows))
+        if self.row_filter_mode == 'first_half':
+            return list(range(total_rows // 2))
+        if self.row_filter_mode == 'second_half':
+            return list(range(total_rows // 2, total_rows))
+        if self.row_filter_mode == 'custom':
+            try:
+                temp_list = list(range(total_rows))
+                selected = eval(f"temp_list[{(self.row_filter_custom_slice or ':').strip()}]")
+                return selected if isinstance(selected, list) else [selected]
+            except Exception as error:
+                print(f"[row_filter] 切片语法错误: {error}")
+        return list(range(total_rows))
+
     #对所有已加载文件的 Y 列执行纵向对称处理
     def apply_center(self):
         if not getattr(self, "loaded_files", None):
@@ -5437,33 +5193,29 @@ class PlotApp(QMainWindow):
             self.statusBar().showMessage("请选择 Y 列")
             return
         
-        # 保存当前状态以便撤回
-        self.history.append(copy.deepcopy(self.loaded_files))
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-
-        changed = False
-        for file_path, df in self.loaded_files:
+        changes = []
+        for file_position, (file_path, df) in enumerate(self.loaded_files):
             if y_col in df.columns:
                 try:
                     # 获取当前行范围过滤的索引
-                    filtered_row_indices = self._get_filtered_rows(df)
+                    row_positions = self._get_filtered_row_positions(df)
                     
                     # 如果有行范围过滤，只处理这些行
-                    if self.row_filter_enabled and len(filtered_row_indices) < len(df):
-                        df_to_process = df.loc[filtered_row_indices].copy()
-                        df_to_process[y_col] = center_data(df_to_process[y_col])
-                        df.loc[filtered_row_indices, y_col] = df_to_process[y_col].values
-                        print(f"[center] applied to {os.path.basename(file_path)} ({y_col}, rows {len(filtered_row_indices)}/{len(df)})")
+                    if self.row_filter_enabled and len(row_positions) < len(df):
+                        df_to_process = df.iloc[row_positions].copy()
+                        values = center_data(df_to_process[y_col])
+                        print(f"[center] applied to {os.path.basename(file_path)} ({y_col}, rows {len(row_positions)}/{len(df)})")
                     else:
-                        df[y_col] = center_data(df[y_col])
+                        values = center_data(df[y_col])
+                        row_positions = list(range(len(df)))
                         print(f"[center] applied to {os.path.basename(file_path)} ({y_col})")
-                    changed = True
+                    changes.append((file_position, y_col, row_positions, values))
                 except Exception as e:
                     print(f"[center] failed on {file_path}: {e}")
             else:
                 print(f"[center] skip {os.path.basename(file_path)}: no column {y_col}")
 
+        changed = self._commit_column_changes(changes)
         if changed:
             self.statusBar().showMessage(f"对称处理完成（列: {y_col})")
             self.replot_all()
@@ -5481,41 +5233,37 @@ class PlotApp(QMainWindow):
             self.statusBar().showMessage("请选择 Y 列")
             return
         
-        # 保存当前状态以便撤回
-        self.history.append(copy.deepcopy(self.loaded_files))
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-
-        changed = False
-        for file_path, df in self.loaded_files:
+        changes = []
+        for file_position, (file_path, df) in enumerate(self.loaded_files):
             if y_col in df.columns:
                 try:
                     # 获取当前行范围过滤的索引
-                    filtered_row_indices = self._get_filtered_rows(df)
+                    row_positions = self._get_filtered_row_positions(df)
                     
                     # 如果有行范围过滤，只处理这些行
-                    if self.row_filter_enabled and len(filtered_row_indices) < len(df):
-                        df_to_process = df.loc[filtered_row_indices].copy()
+                    if self.row_filter_enabled and len(row_positions) < len(df):
+                        df_to_process = df.iloc[row_positions].copy()
                         # 先对称
                         df_to_process[y_col] = center_data(df_to_process[y_col])
                         # 再归一化
                         normalized_Y, top_n_avg = normalize_data(df_to_process[y_col])
-                        df_to_process[y_col] = normalized_Y
-                        df.loc[filtered_row_indices, y_col] = df_to_process[y_col].values
-                        print(f"[normalize] applied to {os.path.basename(file_path)} ({y_col}, rows {len(filtered_row_indices)}/{len(df)}), top_n_avg={top_n_avg}")
+                        values = normalized_Y
+                        print(f"[normalize] applied to {os.path.basename(file_path)} ({y_col}, rows {len(row_positions)}/{len(df)}), top_n_avg={top_n_avg}")
                     else:
                         # 先对称
-                        df[y_col] = center_data(df[y_col])
+                        centered = center_data(df[y_col])
                         # 再归一化
-                        normalized_Y, top_n_avg = normalize_data(df[y_col])
-                        df[y_col] = normalized_Y
+                        normalized_Y, top_n_avg = normalize_data(centered)
+                        values = normalized_Y
+                        row_positions = list(range(len(df)))
                         print(f"[normalize] applied to {os.path.basename(file_path)} ({y_col}), top_n_avg={top_n_avg}")
-                    changed = True
+                    changes.append((file_position, y_col, row_positions, values))
                 except Exception as e:
                     print(f"[normalize] failed on {file_path}: {e}")
             else:
                 print(f"[normalize] skip {os.path.basename(file_path)}: no column {y_col}")
 
+        changed = self._commit_column_changes(changes)
         if changed:
             self.statusBar().showMessage(f"归一化完成（列: {y_col})")
             self.replot_all()
@@ -5535,11 +5283,6 @@ class PlotApp(QMainWindow):
             self.statusBar().showMessage("请先选择 X/Y 列")
             return
         
-        # 保存当前状态以便撤回
-        self.history.append(copy.deepcopy(self.loaded_files))
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-
         # 弹出表格让用户输入每条曲线的区间
         dlg = QDialog(self)
         dlg.setWindowTitle("设置去多项式背景拟合区间")
@@ -5588,6 +5331,7 @@ class PlotApp(QMainWindow):
             success_count = 0
             skip_count = 0
             error_count = 0
+            changes = []
             
             for i, (path, df) in enumerate(self.loaded_files):
                 item_min = table.item(i, 1)
@@ -5608,11 +5352,11 @@ class PlotApp(QMainWindow):
                         continue
                     
                     # 获取当前行范围过滤的索引
-                    filtered_row_indices = self._get_filtered_rows(df)
+                    row_positions = self._get_filtered_row_positions(df)
                     
                     # 如果有行范围过滤，只处理这些行
-                    if self.row_filter_enabled and len(filtered_row_indices) < len(df):
-                        df_to_process = df.loc[filtered_row_indices].copy()
+                    if self.row_filter_enabled and len(row_positions) < len(df):
+                        df_to_process = df.iloc[row_positions].copy()
                         # 选择指定区间的数据（在行范围内）
                         mask = (df_to_process[x_col] >= B_min) & (df_to_process[x_col] <= B_max)
                         
@@ -5628,11 +5372,12 @@ class PlotApp(QMainWindow):
                             error_count += 1
                             continue
                         
-                        # 使用用户选择的多项式阶数进行拟合
-                        p = np.polyfit(df_to_process.loc[mask, x_col], df_to_process.loc[mask, y_col], poly_order)
-                        df_to_process[y_col] = df_to_process[y_col] - np.polyval(p, df_to_process[x_col])
-                        df.loc[filtered_row_indices, y_col] = df_to_process[y_col].values
-                        print(f"[background] 成功: 去{poly_order}次多项式背景 - {os.path.basename(path)} ({y_col}, rows {len(filtered_row_indices)}/{len(df)})")
+                        # 使用纯处理核心拟合并移除背景
+                        background_result = remove_polynomial_background(
+                            df_to_process[x_col], df_to_process[y_col], B_min, B_max, poly_order
+                        )
+                        values = background_result.values
+                        print(f"[background] 成功: 去{poly_order}次多项式背景 - {os.path.basename(path)} ({y_col}, rows {len(row_positions)}/{len(df)})")
                     else:
                         # 选择指定区间的数据
                         mask = (df[x_col] >= B_min) & (df[x_col] <= B_max)
@@ -5649,10 +5394,14 @@ class PlotApp(QMainWindow):
                             error_count += 1
                             continue
                         
-                        # 使用用户选择的多项式阶数进行拟合
-                        p = np.polyfit(df.loc[mask, x_col], df.loc[mask, y_col], poly_order)
-                        df[y_col] = df[y_col] - np.polyval(p, df[x_col])
+                        # 使用纯处理核心拟合并移除背景
+                        background_result = remove_polynomial_background(
+                            df[x_col], df[y_col], B_min, B_max, poly_order
+                        )
+                        values = background_result.values
+                        row_positions = list(range(len(df)))
                         print(f"[background] 成功: 去{poly_order}次多项式背景 - {os.path.basename(path)} ({y_col})")
+                    changes.append((i, y_col, row_positions, values))
                     success_count += 1
                     
                 except ValueError as e:
@@ -5662,6 +5411,7 @@ class PlotApp(QMainWindow):
                     print(f"[background] 错误: {os.path.basename(path)} 处理失败 - {e}")
                     error_count += 1
             
+            changed = self._commit_column_changes(changes)
             dlg.accept()
             
             # 显示处理结果统计
@@ -5670,7 +5420,8 @@ class PlotApp(QMainWindow):
                 result_msg += f", 失败{error_count}"
             self.statusBar().showMessage(result_msg)
             
-            self.replot_all()
+            if changed:
+                self.replot_all()
 
         btn_ok.clicked.connect(on_ok)
         btn_cancel.clicked.connect(dlg.reject)
@@ -5854,6 +5605,7 @@ class PlotApp(QMainWindow):
             y = 13 * np.cos(t) - 5 * np.cos(2 * t) - 2 * np.cos(3 * t) - np.cos(4 * t)
             df = pd.DataFrame({"x": x, "y": y})
             self.loaded_files = [("heart_placeholder", df)]
+            self.history.reset(self.loaded_files)
             self.placeholder_active = True
 
             # 设置下拉选项为示例列
@@ -5888,6 +5640,7 @@ class PlotApp(QMainWindow):
                 demo_files.append((f"{a:.2f}_cosx", df))
 
             self.loaded_files = demo_files
+            self.history.reset(self.loaded_files)
             self.placeholder_active = True
 
             # 下拉列设置
@@ -5910,16 +5663,67 @@ class PlotApp(QMainWindow):
             self.statusBar().showMessage("已加载示例曲线（7条 a*cos(x)，a=0.5~2.5），可用于观察配色", 4000)
         except Exception as e:
             self.statusBar().showMessage(f"加载示例数据失败: {e}", 4000)
+    def _commit_column_changes(self, changes):
+        commands = [
+            ColumnPatchCommand.create(self.history, file_position, column, rows, values)
+            for file_position, column, rows, values in changes
+        ]
+        return self.history.execute(CompositeCommand(commands)) if commands else False
+
+    def _commit_row_deletions(self, deletions, preserve_view=False):
+        commands = [
+            DeleteRowsCommand.create(self.history, file_position, rows)
+            for file_position, rows in sorted(deletions.items())
+        ]
+        changed = self.history.execute(CompositeCommand(commands)) if commands else False
+        return changed
+
+    def _commit_file_deletions(self, file_positions):
+        return self.history.execute(DeleteFilesCommand.create(self.history, file_positions))
+
+    def _refresh_history_view(self, preserve_view=False):
+        self._update_combo_columns()
+        if self.loaded_files:
+            self.replot_all(preserve_view=preserve_view)
+        else:
+            self.ax.clear()
+            self.canvas.draw()
+
+    def closeEvent(self, event):
+        self.interactive_draws.cancel()
+        self.tasks.cancel_all()
+        if not self.tasks.wait_for_done(3000):
+            LOGGER.warning("close_deferred active_tasks=%d", self.tasks.active_count)
+            self.statusBar().showMessage("后台任务仍在安全退出，请稍后再关闭")
+            event.ignore()
+            return
+        LOGGER.info("window_closed active_tasks=%d", self.tasks.active_count)
+        super().closeEvent(event)
+
     #撤回上一步操作
     def undo(self):
-        if self.history:
-            self.loaded_files = self.history.pop()
-            # 撤回后需要更新 combo 列表，使其反映新的 loaded_files
-            self._update_combo_columns()
-            self.replot_all()
-            self.statusBar().showMessage("已撤回上一步操作")
-        else:
+        try:
+            changed = self.history.undo()
+        except HistoryError as error:
+            self.statusBar().showMessage(f"撤回失败: {error}")
+            return
+        if not changed:
             self.statusBar().showMessage("没有可撤回的操作")
+            return
+        self._refresh_history_view()
+        self.statusBar().showMessage("已撤回上一步操作")
+
+    def redo(self):
+        try:
+            changed = self.history.redo()
+        except HistoryError as error:
+            self.statusBar().showMessage(f"重做失败: {error}")
+            return
+        if not changed:
+            self.statusBar().showMessage("没有可重做的操作")
+            return
+        self._refresh_history_view()
+        self.statusBar().showMessage("已重做上一步操作")
 
     # 辅助函数：根据当前 loaded_files 更新 combo_x 和 combo_y 的列选项
     def _update_combo_columns(self):
@@ -5981,221 +5785,73 @@ class PlotApp(QMainWindow):
     #导出当前加载的数据到文件（Excel/CSV/TXT）
     
     def _show_column_selection_dialog(self):
-        """显示列选择对话框，返回用户选中的列列表，或 None 如果取消"""
-        # 收集所有文件中的所有列名
-        all_columns = set()
-        for _, df in self.loaded_files:
-            all_columns.update(df.columns)
-        
-        if not all_columns:
-            QMessageBox.warning(self, "提示", "没有找到任何列")
-            return None
-        
-        all_columns = sorted(list(all_columns))
-        
-        # 创建对话框
-        dlg = QDialog(self)
-        dlg.setWindowTitle("选择要导出的列")
-        dlg.resize(400, 400)
-        layout = QVBoxLayout(dlg)
-        layout.setSpacing(12)
-        
-        # 说明信息
-        layout.addWidget(QLabel("选择要导出的列（勾选全选）："))
-        
-        # "全选"复选框
-        select_all_check = QCheckBox("全选")
-        layout.addWidget(select_all_check)
-        
-        # 列选择列表（可滚动）
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        column_checks = {}
-        for col in all_columns:
-            check = QCheckBox(col)
-            check.setChecked(True)  # 默认全选
-            column_checks[col] = check
-            container_layout.addWidget(check)
-        
-        container_layout.addStretch()
-        scroll_area.setWidget(container)
-        layout.addWidget(scroll_area)
-        
-        # 全选/取消全选功能
-        def toggle_all(checked):
-            for check in column_checks.values():
-                check.setChecked(checked)
-        
-        select_all_check.stateChanged.connect(toggle_all)
-        
-        # 初始化全选复选框状态
-        select_all_check.setChecked(True)
-        
-        # 按钮
-        btn_layout = QHBoxLayout()
-        btn_ok = QPushButton("确定")
-        btn_cancel = QPushButton("取消")
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
-        layout.addLayout(btn_layout)
-        
-        selected_columns = None
-        
-        def on_ok():
-            nonlocal selected_columns
-            # 获取选中的列
-            selected_columns = [col for col, check in column_checks.items() if check.isChecked()]
-            
-            if not selected_columns:
-                QMessageBox.warning(dlg, "提示", "请至少选择一列")
-                return
-            
-            dlg.accept()
-        
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        
-        dlg.exec()
-        return selected_columns
+        """显示列选择对话框，返回用户选中的列列表，或 None 如果取消。"""
+        return choose_export_columns(self, self.loaded_files)
+
 
     def export_data(self):
+        """Collect GUI choices and delegate export data and file rules to the core."""
         if not self.loaded_files:
             self.statusBar().showMessage("没有数据可以导出")
             return
 
-        # 首先显示列选择对话框
         selected_columns = self._show_column_selection_dialog()
-        if selected_columns is None:  # 用户取消
+        if selected_columns is None:
             return
 
-        # 打开保存文件对话框
-        # 禁用 QFileDialog 的默认覆盖确认，改为使用自定义对话框
         options = QFileDialog.Options() | QFileDialog.DontConfirmOverwrite
         file_path, _ = QFileDialog.getSaveFileName(
-            self, 
-            "导出数据", 
-            "", 
-            "CSV Files (*.csv);;Excel Files (*.xlsx);;Text Files (*.txt)", 
-            options=options
+            self,
+            "导出数据",
+            "",
+            "CSV Files (*.csv);;Excel Files (*.xlsx);;Text Files (*.txt)",
+            options=options,
         )
         if not file_path:
             return
 
-        ext = os.path.splitext(file_path)[1].lower()
-
-        # 检查文件是否已存在，如果存在则询问用户是否覆盖或追加
-        file_mode = 'w'  # 默认覆盖模式
-        excel_mode = 'w'  # Excel 的默认模式
-        
+        mode = "overwrite"
         if os.path.exists(file_path):
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("文件已存在")
-            msg_box.setText(f"文件 {os.path.basename(file_path)} 已存在，请选择操作方式：")
-            msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-            msg_box.setButtonText(QMessageBox.Yes, "覆盖")
-            msg_box.setButtonText(QMessageBox.No, "追加")
-            msg_box.setButtonText(QMessageBox.Cancel, "取消")
-            ret = msg_box.exec()
-            
-            if ret == QMessageBox.Cancel:
+            mode = choose_existing_file_mode(self, file_path)
+            if mode is None:
                 return
-            elif ret == QMessageBox.No:  # 追加
-                file_mode = 'a'
-                excel_mode = 'a'
-            # Yes 保持默认的覆盖模式
 
         try:
-            if ext == ".xlsx":
-                # 多 sheet 导出
-                try:
-                    import openpyxl
-                except ImportError:
-                    self.statusBar().showMessage("导出 Excel 需要安装 openpyxl")
-                    return
+            fitted_curves = [
+                FittedCurve(
+                    name=f"fitted_curve_{index + 1}",
+                    x=line.get_xdata(),
+                    y=line.get_ydata(),
+                )
+                for index, line in enumerate(self.fitted_lines)
+            ]
+        except Exception as error:
+            export_error = DataIOError(
+                path=file_path,
+                operation="export",
+                code="fitted_curve_read_failed",
+                reason=str(error),
+            )
+            self.statusBar().showMessage(f"导出数据失败: {export_error}")
+            LOGGER.error("export_failed error=%s", export_error)
+            return
 
-                with pd.ExcelWriter(file_path, engine='openpyxl', mode=excel_mode) as writer:
-                    x_col = self.combo_x.currentText()
-                    for i, (path, df) in enumerate(self.loaded_files):
-                        # 如果已转换为弧度模式，导出时也转换原始数据
-                        export_df = df.copy()
-                        if self.x_unit_mode == 'radian' and x_col in export_df.columns:
-                            export_df[x_col] = pd.to_numeric(export_df[x_col], errors='coerce') * np.pi / 180.0
-                        
-                        # 选择要导出的列
-                        if selected_columns:
-                            available_cols = [col for col in selected_columns if col in export_df.columns]
-                            export_df = export_df[available_cols]
-                        
-                        # sheet 名称不能太长，且不能重复
-                        sheet_name = f"{i}_{os.path.basename(path)[:20]}"
-                        export_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # 如果有拟合数据，也导出
-                    if self.fitted_lines:
-                        try:
-                            fitted_data_list = []
-                            for idx, line in enumerate(self.fitted_lines):
-                                x_fit = line.get_xdata()
-                                y_fit = line.get_ydata()
-                                fitted_df = pd.DataFrame({'x_fit': x_fit, 'y_fit': y_fit})
-                                fitted_data_list.append(fitted_df)
-                            
-                            if fitted_data_list:
-                                fitted_combined = pd.concat(fitted_data_list, axis=1)
-                                fitted_combined.to_excel(writer, sheet_name="Fitted_Data", index=False)
-                        except Exception as e:
-                            print(f"导出拟合数据失败: {e}")
+        try:
+            bundle = prepare_export(
+                [ExportSource(path, frame) for path, frame in self.loaded_files],
+                fitted_curves,
+                selected_columns,
+                self.combo_x.currentText(),
+                self.x_unit_mode,
+                os.path.splitext(file_path)[1],
+            )
+            write_export(file_path, bundle, mode)
+        except DataIOError as error:
+            self.statusBar().showMessage(f"导出数据失败: {error}")
+            LOGGER.error("export_failed error=%s", error)
+            return
 
-            else:
-                # CSV 或 TXT，合并到一个文件
-                sep = ',' if ext == '.csv' else '\t'
-                x_col = self.combo_x.currentText()
-                with open(file_path, file_mode, encoding='utf-8') as f:
-                    # 如果是追加模式，添加分隔符
-                    if file_mode == 'a':
-                        f.write("\n" + "="*60 + "\n")
-                        f.write(f"# 追加时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                        f.write("="*60 + "\n\n")
-                    
-                    for path, df in self.loaded_files:
-                        f.write(f"# 文件: {os.path.basename(path)}\n")
-                        # 如果已转换为弧度模式，导出时也转换原始数据
-                        export_df = df.copy()
-                        if self.x_unit_mode == 'radian' and x_col in export_df.columns:
-                            export_df[x_col] = pd.to_numeric(export_df[x_col], errors='coerce') * np.pi / 180.0
-                        
-                        # 选择要导出的列
-                        if selected_columns:
-                            available_cols = [col for col in selected_columns if col in export_df.columns]
-                            export_df = export_df[available_cols]
-                        
-                        export_df.to_csv(f, sep=sep, index=False)
-                        f.write("\n\n")
-                    
-                    # 如果有拟合数据，也导出
-                    if self.fitted_lines:
-                        try:
-                            f.write("\n# ===== 拟合数据 =====\n")
-                            for idx, line in enumerate(self.fitted_lines):
-                                x_fit = line.get_xdata()
-                                y_fit = line.get_ydata()
-                                f.write(f"# 拟合曲线 {idx+1}\n")
-                                fitted_df = pd.DataFrame({'x_fit': x_fit, 'y_fit': y_fit})
-                                fitted_df.to_csv(f, sep=sep, index=False)
-                                f.write("\n\n")
-                        except Exception as e:
-                            print(f"导出拟合数据失败: {e}")
-
-            self.statusBar().showMessage(f"数据导出成功: {file_path}")
-        except Exception as e:
-            self.statusBar().showMessage(f"导出数据失败: {e}")
-            print("导出数据错误:", e)
+        self.statusBar().showMessage(f"数据导出成功: {file_path}")
 
     
     def apply_light_theme(self):
@@ -6261,34 +5917,17 @@ class PlotApp(QMainWindow):
 
 #纵坐标对称以及归一化数据
 def center_data(Y):
-    Y = np.asarray(Y)
-    center_value = (np.nanmax(Y) + np.nanmin(Y)) / 2
-    centered_Y = Y - center_value
-    return centered_Y
+    return center_values(Y).values
 
 def normalize_data(Y, top_n=20):
-    Y = pd.to_numeric(Y, errors='coerce')
-    Y = np.asarray(Y)
-
-    valid_Y = Y[~np.isnan(Y)]
-
-    if len(valid_Y) == 0:
-        return Y, np.nan
-    if len(valid_Y) < top_n:
-        top_n = len(valid_Y)
-
-    top_n_avg = np.nanmean(np.partition(valid_Y, -top_n)[-top_n:])
-    if top_n_avg == 0:
-        return Y, top_n_avg
-
-    normalized_Y = np.where(Y > top_n_avg, 
-                            1, 
-                            np.where(Y < -top_n_avg, 
-                                     -1, 
-                                     Y / top_n_avg
-                                    )
-                           )
-    return normalized_Y, top_n_avg
+    try:
+        result = normalize_values(Y, top_n=top_n)
+    except ProcessingError as error:
+        if error.code in {"empty_values", "no_finite_values"}:
+            values = np.asarray(pd.to_numeric(Y, errors="coerce"), dtype=float)
+            return values, np.nan
+        raise
+    return result.values, result.metadata["scale"]
 
 def local_flatten_keep_anchor(x, y, x1, x2, transition=0, anchor='left', strength=1.0):
     """
@@ -6305,53 +5944,9 @@ def local_flatten_keep_anchor(x, y, x1, x2, transition=0, anchor='left', strengt
     返回：
     - y_new: 处理后的数据
     """
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-
-    if x1 > x2:
-        x1, x2 = x2, x1
-
-    y_new = y.copy()
-
-    mask = (x >= x1) & (x <= x2)
-    if np.sum(mask) < 2:
-        return y_new
-
-    x_seg = x[mask]
-    y_seg = y[mask]
-
-    # 拟合局部线性趋势
-    a, b = np.polyfit(x_seg, y_seg, 1)
-
-    # 选择锚点
-    if anchor == 'left':
-        x_anchor = x1
-    elif anchor == 'right':
-        x_anchor = x2
-    elif anchor == 'center':
-        x_anchor = 0.5 * (x1 + x2)
-    else:
-        raise ValueError("anchor must be 'left', 'right', or 'center'")
-
-    # 核心修正量：锚点处 correction = 0
-    correction = np.zeros_like(y, dtype=float)
-    correction[mask] = strength * a * (x[mask] - x_anchor)
-
-    if transition > 0:
-        # 左过渡
-        left = (x >= x1 - transition) & (x < x1)
-        if np.any(left):
-            wl = 0.5 * (1 - np.cos(np.pi * (x[left] - (x1 - transition)) / transition))
-            correction[left] = wl * strength * a * (x[left] - x_anchor)
-
-        # 右过渡
-        right = (x > x2) & (x <= x2 + transition)
-        if np.any(right):
-            wr = 0.5 * (1 + np.cos(np.pi * (x[right] - x2) / transition))
-            correction[right] = wr * strength * a * (x[right] - x_anchor)
-
-    y_new = y - correction
-    return y_new
+    return local_flatten_values(
+        x, y, x1, x2, transition=transition, anchor=anchor, strength=strength
+    ).values
 
 def denoise_data(df, y_col='rem', window_length=11, polyorder=3, x_col=None, x1=None, x2=None):
     """
@@ -6368,57 +5963,41 @@ def denoise_data(df, y_col='rem', window_length=11, polyorder=3, x_col=None, x1=
     返回：
     - 去噪后的数据数组
     """
-    # 确保 window_length 是奇数
-    if window_length % 2 == 0:
+    # 兼容旧入口：历史行为会把偶数窗口向上调整为奇数；纯核心则严格拒绝偶数窗口。
+    if (
+        isinstance(window_length, (int, np.integer))
+        and not isinstance(window_length, (bool, np.bool_))
+        and window_length % 2 == 0
+    ):
         window_length += 1
-    
-    # 如果指定了区间，只处理区间内的数据
-    if x_col is not None and x1 is not None and x2 is not None:
-        y_new = df[y_col].copy()
-        
-        # 找到区间范围
-        mask = (df[x_col] >= x1) & (df[x_col] <= x2)
-        
-        if np.sum(mask) < 2:
-            return y_new
-        
-        # 获取区间内的数据
-        y_seg = df.loc[mask, y_col].values
-        
-        # 确保 window_length 不超过区间内数据长度
-        window_len = window_length
-        if window_len > len(y_seg):
-            window_len = len(y_seg) if len(y_seg) % 2 == 1 else len(y_seg) - 1
-        
-        if window_len < 2:
-            return y_new
-        
-        # 对区间内的数据进行去噪
-        y_seg_denoised = savgol_filter(y_seg, window_len, polyorder)
-        
-        # 将去噪后的数据放回原位置
-        y_new.loc[mask] = y_seg_denoised
-        
-        return y_new
-    
-    else:
-        # 原始逻辑：对整个数据列进行去噪
-        # 确保 window_length 不超过数据长度
-        if window_length > len(df):
-            window_length = len(df) if len(df) % 2 == 1 else len(df) - 1
-        
-        # 进行 Savitzky-Goyal 滤波去噪
-        return savgol_filter(df[y_col], window_length, polyorder)
+    try:
+        result = denoise_values(
+            df[y_col].to_numpy(),
+            window_length,
+            polyorder,
+            x=None if x_col is None else df[x_col].to_numpy(),
+            x1=x1,
+            x2=x2,
+        )
+    except ProcessingError as error:
+        if error.code == "invalid_window":
+            return df[y_col].copy()
+        raise
+    if x_col is not None:
+        return pd.Series(result.values, index=df.index, name=y_col)
+    return result.values
 
 
 if __name__ == "__main__":
-    # 启用高 DPI 支持（必须在创建 QApplication 之前设置）
-    # 启用高 DPI 像素图
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-    
+    log_path = configure_logging()
     # 兼容在嵌入/交互环境中已存在 QApplication 的情况
     app = QApplication.instance() or QApplication(sys.argv)
+    sys.excepthook = make_exception_hook(
+        lambda title, message, details: show_error_details(
+            QApplication.activeWindow(), title, message, details
+        )
+    )
+    LOGGER.info("application_start log_path=%s", log_path)
     
     # 创建主窗口（窗口尺寸和位置已在 __init__ 中自动设置）
     window = PlotApp()

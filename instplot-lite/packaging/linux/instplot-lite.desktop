@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=InstPlot Lite
+Comment=Lightweight numeric data plotting and point editing
+Exec=instplot-lite %F
+Icon=instplot-lite
+Terminal=false
+Categories=Education;Science;DataVisualization;
+MimeType=text/plain;text/csv;

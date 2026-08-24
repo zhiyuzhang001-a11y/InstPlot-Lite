@@ -1,20 +1,4 @@
-# InstPlot - 实验数据可视化工具的依赖文件
-
-# GUI框架
-PySide6>=6.0.0
-
-# 数据处理
-pandas>=1.0.0
-numpy>=1.18.0
-
-# 绘图和可视化
-matplotlib>=3.3.0
-
-# 科学计算
-scipy>=1.5.0
-
-# 图像处理
-Pillow>=8.0.0
-
-# 字符编码检测
-chardet>=4.0.0
+# Install the locked runtime dependencies first, then install this local project with --no-deps.
+# Regenerate the universal Python 3.10-3.14 lock from the minimum supported version:
+# uv pip compile pyproject.toml --python-version 3.10 --universal --generate-hashes --output-file requirements.lock
+-r requirements.lock

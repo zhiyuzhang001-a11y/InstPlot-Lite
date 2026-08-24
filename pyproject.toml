@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instplot"
+version = "1.0.0"
+description = "Experimental data visualization and preprocessing tool"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "PySide6-Essentials>=6.6,<7",
+    "chardet>=5,<6",
+    "matplotlib>=3.8,<4",
+    "numpy>=1.26,<3",
+    "openpyxl>=3.1,<4",
+    "pandas>=2.1,<3",
+    "qtawesome>=1.3,<2",
+    "scipy>=1.11,<2",
+    "xlrd>=2.0,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.urls]
+Repository = "https://github.com/zhiyuzhang001-a11y/InstPlot"
+Issues = "https://github.com/zhiyuzhang001-a11y/InstPlot/issues"
+
+[tool.setuptools]
+py-modules = ["InstPlot", "instplot_diagnostics", "instplot_dialogs", "instplot_fitting", "instplot_history", "instplot_io", "instplot_processing", "instplot_rendering", "instplot_tasks"]
+
+[tool.setuptools.packages.find]
+include = ["symbol_icons*"]
+
+[tool.setuptools.package-data]
+symbol_icons = ["*/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
