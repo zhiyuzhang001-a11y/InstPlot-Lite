@@ -37,7 +37,7 @@ jobs:
         working-directory: instplot-lite
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Linux GUI build dependencies
         if: runner.os == 'Linux'
@@ -85,7 +85,7 @@ jobs:
         working-directory: instplot-lite
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         run: rustup show
@@ -101,7 +101,7 @@ jobs:
         run: packaging/macos/build-dmg.sh
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: InstPlot-Lite-macos-${{ matrix.arch }}
           path: instplot-lite/target/package/*.dmg
@@ -117,7 +117,7 @@ jobs:
         working-directory: instplot-lite
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         run: rustup show
@@ -133,6 +133,15 @@ jobs:
           $version = [regex]::Match($manifest, '(?m)^version = "([^"]+)"').Groups[1].Value
           if (-not $version) { throw "Unable to read package version" }
           "INSTPLOT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Fetch pinned Simplified Chinese installer translation
+        run: |
+          $translation = "packaging/windows/ChineseSimplified.isl"
+          $uri = "https://raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation/1ff90acc4ed4aee82b1cda43253243deee3daed4/ChineseSimplified.isl"
+          Invoke-WebRequest -Uri $uri -OutFile $translation
+          $actual = (Get-FileHash -Algorithm SHA256 $translation).Hash.ToLowerInvariant()
+          $expected = "bf0751fa176569c6faa2f6e17ed2734617bef325d5cc06eae030fdd0258ee778"
+          if ($actual -ne $expected) { throw "Chinese installer translation checksum mismatch" }
 
       - name: Build Inno Setup installer
         run: |
@@ -155,7 +164,7 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Uninstaller exited with $($process.ExitCode)" }
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: InstPlot-Lite-windows-x64
           path: instplot-lite/target/package/*-setup.exe
@@ -170,7 +179,7 @@ jobs:
         working-directory: instplot-lite
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install GUI build dependencies
         run: |
@@ -197,7 +206,7 @@ jobs:
           sudo apt-get remove -y instplot-lite
 
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: InstPlot-Lite-linux-x64
           path: |

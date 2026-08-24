@@ -27,7 +27,7 @@ MinVersion=10.0.17763
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked

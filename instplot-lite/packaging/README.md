@@ -17,7 +17,9 @@ Application signature and Apple notarization in CI.
 Build the release executable, set `INSTPLOT_VERSION`, and compile
 `packaging/windows/InstPlotLite.iss` with Inno Setup 6. The per-user installer
 adds a Start Menu shortcut and offers an optional desktop shortcut without
-requiring administrator privileges.
+requiring administrator privileges. CI fetches the Simplified Chinese Inno
+Setup translation from a pinned upstream revision and verifies its SHA-256
+checksum before compiling the bilingual installer.
 
 ## Linux
 
