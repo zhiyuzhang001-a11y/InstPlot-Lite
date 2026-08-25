@@ -269,6 +269,9 @@ mod tests {
     use super::{TextExportFormat, encode_retained_rows, save_all_text, save_workbook};
     use crate::data::{DataSet, NumericColumn, read_data_file};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEMP_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
     fn dataset(name: &str) -> DataSet {
         DataSet {
@@ -295,7 +298,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!(
             "instplot-lite-{name}-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&directory).unwrap();
         directory
