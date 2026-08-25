@@ -1404,7 +1404,7 @@ impl eframe::App for InstPlotLiteApp {
             .legend(Legend::default())
             .height(plot_height)
             .allow_zoom(true)
-            .allow_scroll(true)
+            .allow_scroll(false)
             .allow_drag(true)
             .allow_boxed_zoom(false)
             .pan_pointer_button(PointerButton::Secondary);
@@ -1423,6 +1423,14 @@ impl eframe::App for InstPlotLiteApp {
             // plot rectangle, so reserve a real gutter inside the viewport.
             ui.add_space(PLOT_LEFT_GUTTER);
             plot.show(ui, |plot_ui| {
+                if plot_ui.response().contains_pointer() {
+                    let wheel_delta = plot_ui.ctx().input(|input| input.smooth_scroll_delta.y);
+                    if wheel_delta != 0.0 {
+                        plot_ui.zoom_bounds_around_hovered(egui::Vec2::splat(wheel_zoom_factor(
+                            wheel_delta,
+                        )));
+                    }
+                }
                 if self.datasets.is_empty() {
                     let color = series_color(0);
                     plot_ui.line(Line::new("示例曲线", self.demo_points.clone()).color(color));
@@ -1777,6 +1785,10 @@ fn with_png_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+fn wheel_zoom_factor(wheel_delta: f32) -> f32 {
+    (wheel_delta / 200.0).exp()
+}
+
 fn demo_curve(point_count: usize) -> Vec<[f64; 2]> {
     let divisor = point_count.saturating_sub(1).max(1) as f64;
     (0..point_count)
@@ -1801,7 +1813,7 @@ fn series_color(index: usize) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_interface_style, demo_curve};
+    use super::{configure_interface_style, demo_curve, wheel_zoom_factor};
     use eframe::egui;
 
     #[test]
@@ -1813,6 +1825,13 @@ mod tests {
 
         assert_eq!(context.theme(), egui::Theme::Dark);
         assert!(context.global_style().visuals.dark_mode);
+    }
+
+    #[test]
+    fn mouse_wheel_zoom_uses_conventional_direction() {
+        assert!(wheel_zoom_factor(120.0) > 1.0);
+        assert!(wheel_zoom_factor(-120.0) < 1.0);
+        assert_eq!(wheel_zoom_factor(0.0), 1.0);
     }
 
     #[test]
