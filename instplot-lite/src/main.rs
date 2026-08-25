@@ -4,6 +4,7 @@ mod app;
 mod data;
 mod data_export;
 mod edit_history;
+mod fitting;
 mod fonts;
 mod image_export;
 mod processing;
@@ -17,20 +18,25 @@ fn main() -> eframe::Result {
         let mut failed = false;
         for path in &arguments.files {
             match data::read_data_file(path) {
-                Ok(dataset) => println!(
-                    "OK\t{}\t{} rows\t{} columns\t{}\t{}\t{}",
-                    path.display(),
-                    dataset.row_count,
-                    dataset.columns.len(),
-                    dataset.encoding,
-                    dataset.separator,
-                    dataset
-                        .columns
-                        .iter()
-                        .map(|column| column.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" | ")
-                ),
+                Ok(datasets) => {
+                    for dataset in datasets {
+                        println!(
+                            "OK\t{}\t{}\t{} rows\t{} columns\t{}\t{}\t{}",
+                            path.display(),
+                            dataset.display_name(),
+                            dataset.row_count,
+                            dataset.columns.len(),
+                            dataset.encoding,
+                            dataset.separator,
+                            dataset
+                                .columns
+                                .iter()
+                                .map(|column| column.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" | ")
+                        );
+                    }
+                }
                 Err(error) => {
                     failed = true;
                     eprintln!("ERROR\t{}\t{error}", path.display());

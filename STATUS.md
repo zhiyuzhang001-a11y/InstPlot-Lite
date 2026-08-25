@@ -1,6 +1,6 @@
 # Current project status
 
-- Date: `2026-08-24`
+- Date: `2026-08-25`
 - Project state: `M3-M7.4 COMPLETE / M7.5 AUTOMATION COMPLETE / PUBLIC RELEASE PENDING_USER_AUTHORIZATION / REAL SAMPLES PENDING_USER_VALIDATION`
 - Active plan: `docs/M7_RELEASE_PLAN.md`
 - Model Handoff Protocol: `paused`；文件保留，`MODEL_HANDOFF.md` 当前不参与普通工作路由。
@@ -15,6 +15,31 @@
 macOS、Linux 对应的一键隔离环境安装和启动。
 
 ## Completed
+
+- InstPlot Lite 原生拟合已完成：纯 Rust 支持 1–10 阶多项式、指数、对数、幂函数和安全自定义表达式；
+  界面支持当前/合并同名列、X/Y 范围和角度/弧度转换，并显示方程、R²、点数及拟合线。本地
+  `38 passed`，真实 CoGd 数据的二次拟合原生界面验证为 `R² = 0.928739`。Release 二进制约
+  `5.6 MiB`，导入 32 列真实测试文件并导出图片的峰值 RSS 为 `125,370,368 bytes`，相较拟合前只增加
+  约 `1.2 MB`；三系统 CI 打包复核等待下一次推送触发。
+- 拟合窗口的自定义函数与初始参数已改为带灰度高对比边框、背景、示例和“可编辑”标题的输入区；全局字体顺序
+  改为清晰 Latin 字体优先、内置中文字体回退，正文/提示最小字号同步提高。本地原生视觉复核与
+  `39 passed` 通过。
+- InstPlot Lite 已内置 117 KiB 的 Arial 度量兼容英文字体子集（Liberation Sans 2.1.5，按 OFL 要求
+  重命名为 InstPlot Sans），作为比例界面字体首选；中文继续由内置 Noto Sans SC 子集回退。字体随
+  Rust 二进制进入 Windows、macOS、Linux 安装包，不依赖系统字体或用户额外安装。`39 passed`，macOS
+  原生界面中英混排复核通过；Release 二进制为 `5,985,280 bytes`（增加 `132,096 bytes`），重建 DMG
+  为 `3,595,601 bytes`，磁盘映像校验及应用签名验证通过。
+- InstPlot Lite 绘图区新增 `12 px` 底部留白，并从绘图高度中等量扣除；不改变数据比例、缩放、左侧布局
+  或坐标轴实现。导出裁剪范围同步包含该留白，真实 `0V_IP_1.dat` 导出视觉复核及 `39 passed` 通过。
+- 空白启动状态不再显示内部字体加载信息，改为文件导入引导；导入后仍
+  自动显示实际导入结果。原生启动界面与 `39 passed` 复核通过。
+- InstPlot Lite 常用数据格式与批量导出已完成：导入支持 TXT/CSV/DAT/TSV/XLSX/XLS，多工作表 Excel
+  按有效数值工作表拆成独立数据集并跳过空白/说明页；导出支持当前数据集 CSV/XLSX/TSV/TXT，以及全部
+  数据集写入单个多工作表 XLSX 或多个文本文件。批量文本导出自动避让磁盘已有文件和同名数据集，不覆盖；
+  Excel 读写保持纯 Rust，不需要 Python 或 Microsoft Excel。TSV、旧 XLS、多工作表、删除行往返与同名
+  防覆盖测试纳入回归，当前 `44 passed`。Release 二进制为 `6,813,392 bytes`，较加入 Excel 前增加
+  `828,112 bytes`；1.9 MiB、10 万行、4 列、2 工作表的 XLSX 解析耗时 `0.07 s`、峰值 RSS
+  `38,567,936 bytes`。重建 macOS DMG 为 `4,251,088 bytes`，映像及应用签名验证通过。
 
 - M0 审计、M1 回归/依赖基线已完成。
 - M2 数据 I/O 核心和自动化替代验收已接受；真实仪器文件验证延期到 M7。

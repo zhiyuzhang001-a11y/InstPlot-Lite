@@ -23,13 +23,16 @@ a terminal.
   Latin, Greek, mathematical symbols, and punctuation.
 - Release-size optimization enabled (LTO, one codegen unit, stripped symbols).
 - Three-platform GitHub Actions build workflow added.
-- TXT/CSV/DAT import implemented with UTF-8/UTF-16/GBK decoding, separator and
-  header detection, strict row-width validation, and numeric-column storage.
+- TXT/CSV/DAT/TSV import implemented with UTF-8/UTF-16/GBK decoding, separator
+  and header detection, strict row-width validation, and numeric-column storage.
+- Native XLSX/XLS import maps each valid numeric worksheet to an independent
+  dataset and skips empty or notes-only worksheets without requiring Excel.
 - File-picker and drag-and-drop import are connected to the native interface.
 - PNG export captures the complete plot, tick values, X/Y labels, and legend;
   it excludes the toolbar, sidebar, and status bar.
-- Retained numeric rows can be exported from the active dataset as CSV or
-  tab-delimited TXT; deleted rows are omitted by design.
+- Retained numeric rows can be exported from the active dataset as CSV, XLSX,
+  TSV, or tab-delimited TXT; deleted rows are omitted by design. All datasets
+  can be exported to one multi-sheet XLSX or separate collision-safe text files.
 - Visible-range min/max decimation replaces fixed-stride sampling so narrow
   peaks are retained while plotted point counts stay tied to screen width.
 - Short left-click selects the nearest point within an eight-pixel tolerance;
@@ -68,8 +71,9 @@ a terminal.
 - Native packaging definitions now cover macOS DMG, Windows Inno Setup, Linux
   DEB, and a Linux portable archive. The CI workflow builds and smoke-tests
   these artifacts on their native operating systems.
-- Thirty-three local tests pass with no compiler warnings, including a real
-  Chinese-header CSV fixture and regression cases for column misalignment.
+- Forty-four local tests pass with no compiler warnings, including real XLS and
+  Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
+  and no-overwrite regression cases.
 
 ## L1 measurements: macOS arm64
 
@@ -131,7 +135,8 @@ install, bundled importer execution, and uninstall; the Linux DEB completed the
 same installation lifecycle; both DMGs passed structure, checksum, bundled
 import, and disk-image verification.
 
-The five artifacts are published as the
+The v0.2.0 unsigned preview is being prepared from the completed local source.
+The previous five artifacts remain available in the
 [v0.1.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.1.0).
 The release is intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
@@ -140,8 +145,10 @@ hands-on user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The functional and unsigned-distribution scope for v0.1 is complete. Remaining
-promotion work requires release-owner credentials or hands-on devices:
+The functional scope for v0.2 is complete. The immediate next action is to run
+the native CI packaging matrix and publish its verified artifacts. Remaining
+stable-release promotion work requires release-owner credentials or hands-on
+devices:
 
 1. Configure Apple Developer ID signing and notarization.
 2. Configure Windows Authenticode signing.

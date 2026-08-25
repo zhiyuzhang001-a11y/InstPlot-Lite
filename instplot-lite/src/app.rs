@@ -6,11 +6,13 @@ use egui_plot::{Legend, Line, Plot, PlotPoint, Points};
 use crate::{
     data, data_export,
     edit_history::{EditHistory, HistoryEffect},
+    fitting::{self, FitMethod},
     fonts, image_export,
     processing::{self, Anchor, ProcessingMetadata, ProcessingOperation},
 };
 
 const PLOT_LEFT_GUTTER: f32 = 36.0;
+const PLOT_BOTTOM_GUTTER: f32 = 12.0;
 
 struct PendingDeletion {
     dataset_index: usize,
@@ -33,6 +35,81 @@ struct ProcessingSettings {
     denoise_in_range: bool,
     denoise_min: f64,
     denoise_max: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FitKind {
+    Polynomial,
+    Exponential,
+    Logarithmic,
+    Power,
+    Custom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum XUnitConversion {
+    None,
+    DegreesToRadians,
+    RadiansToDegrees,
+}
+
+impl XUnitConversion {
+    fn convert(self, value: f64) -> f64 {
+        match self {
+            Self::None => value,
+            Self::DegreesToRadians => value.to_radians(),
+            Self::RadiansToDegrees => value.to_degrees(),
+        }
+    }
+
+    fn restore(self, value: f64) -> f64 {
+        match self {
+            Self::None => value,
+            Self::DegreesToRadians => value.to_degrees(),
+            Self::RadiansToDegrees => value.to_radians(),
+        }
+    }
+}
+
+struct FitSettings {
+    merge_datasets: bool,
+    kind: FitKind,
+    degree: usize,
+    use_x_range: bool,
+    x_min: f64,
+    x_max: f64,
+    use_y_range: bool,
+    y_min: f64,
+    y_max: f64,
+    unit_conversion: XUnitConversion,
+    expression: String,
+    initial_parameters: String,
+    message: String,
+}
+
+impl Default for FitSettings {
+    fn default() -> Self {
+        Self {
+            merge_datasets: false,
+            kind: FitKind::Polynomial,
+            degree: 2,
+            use_x_range: false,
+            x_min: 0.0,
+            x_max: 1.0,
+            use_y_range: false,
+            y_min: 0.0,
+            y_max: 1.0,
+            unit_conversion: XUnitConversion::None,
+            expression: "a * sin(b * x + c)".to_owned(),
+            initial_parameters: "1, 1, 0".to_owned(),
+            message: "设置参数后执行拟合；拟合曲线会直接显示在主图中。".to_owned(),
+        }
+    }
+}
+
+struct FitOverlay {
+    points: Vec<[f64; 2]>,
+    r2: f64,
 }
 
 impl Default for ProcessingSettings {
@@ -74,6 +151,9 @@ pub struct InstPlotLiteApp {
     selection_current: Option<egui::Pos2>,
     processing_open: bool,
     processing_settings: ProcessingSettings,
+    fit_open: bool,
+    fit_settings: FitSettings,
+    fit_overlay: Option<FitOverlay>,
     selected_coordinate: Option<[f64; 2]>,
     status: String,
 }
@@ -84,7 +164,7 @@ impl InstPlotLiteApp {
         startup_files: Vec<PathBuf>,
         startup_screenshot: Option<PathBuf>,
     ) -> Self {
-        let font_status = fonts::install_cjk_font(&creation_context.egui_ctx);
+        fonts::install_interface_fonts(&creation_context.egui_ctx);
         configure_interface_style(&creation_context.egui_ctx);
         let mut app = Self {
             demo_points: demo_curve(512),
@@ -105,8 +185,11 @@ impl InstPlotLiteApp {
             selection_current: None,
             processing_open: false,
             processing_settings: ProcessingSettings::default(),
+            fit_open: false,
+            fit_settings: FitSettings::default(),
+            fit_overlay: None,
             selected_coordinate: None,
-            status: font_status,
+            status: "打开或拖入数据：TXT、CSV、DAT、TSV、XLSX、XLS".to_owned(),
         };
         if !startup_files.is_empty() {
             app.load_paths(startup_files);
@@ -116,7 +199,9 @@ impl InstPlotLiteApp {
 
     fn open_files(&mut self) {
         let paths = rfd::FileDialog::new()
-            .add_filter("数据文件", &["txt", "csv", "dat"])
+            .add_filter("数据文件", &["txt", "csv", "dat", "tsv", "xlsx", "xls"])
+            .add_filter("文本数据", &["txt", "csv", "dat", "tsv"])
+            .add_filter("Excel 工作簿", &["xlsx", "xls"])
             .pick_files();
         if let Some(paths) = paths {
             self.load_paths(paths);
@@ -124,27 +209,32 @@ impl InstPlotLiteApp {
     }
 
     fn load_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        let mut loaded = 0_usize;
+        let mut loaded_files = 0_usize;
+        let mut loaded_datasets = 0_usize;
         let mut last_summary = String::new();
         let mut errors = Vec::new();
         for path in paths {
             match data::read_data_file(&path) {
-                Ok(dataset) => {
-                    last_summary = format!(
-                        "{}：{} 行，{} 个数值列，编码 {}，分隔符 {}",
-                        dataset.display_name(),
-                        dataset.row_count,
-                        dataset.columns.len(),
-                        dataset.encoding,
-                        dataset.separator
-                    );
-                    self.datasets.push(dataset);
-                    loaded += 1;
+                Ok(datasets) => {
+                    loaded_files += 1;
+                    loaded_datasets += datasets.len();
+                    if let Some(dataset) = datasets.last() {
+                        last_summary = format!(
+                            "{}：{} 行，{} 个数值列，编码 {}，分隔符 {}",
+                            dataset.display_name(),
+                            dataset.row_count,
+                            dataset.columns.len(),
+                            dataset.encoding,
+                            dataset.separator
+                        );
+                    }
+                    self.datasets.extend(datasets);
                 }
                 Err(error) => errors.push(format!("{}：{error}", path.display())),
             }
         }
-        if loaded > 0 {
+        if loaded_datasets > 0 {
+            self.fit_overlay = None;
             self.selected_coordinate = None;
             self.active_dataset = self.datasets.len().saturating_sub(1);
             let column_count = self
@@ -156,31 +246,34 @@ impl InstPlotLiteApp {
             self.reset_view = true;
             self.visible_x_range = None;
         }
-        self.status = match (loaded, errors.is_empty()) {
+        self.status = match (loaded_files, errors.is_empty()) {
             (0, _) => errors.join("；"),
-            (_, true) => format!("已导入 {loaded} 个文件；{last_summary}"),
+            (_, true) => format!(
+                "已导入 {loaded_files} 个文件，共 {loaded_datasets} 个数据集；{last_summary}"
+            ),
             (_, false) => format!(
-                "已导入 {loaded} 个文件；另有 {} 个失败：{}",
+                "已导入 {loaded_files} 个文件，共 {loaded_datasets} 个数据集；另有 {} 个失败：{}",
                 errors.len(),
                 errors.join("；")
             ),
         };
     }
 
-    fn export_active_data(&mut self) {
+    fn export_active_data(&mut self, extension: &str) {
         let Some(dataset) = self.datasets.get(self.active_dataset) else {
             self.status = "请先导入数据".to_owned();
             return;
         };
-        let stem = dataset
-            .source
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("instplot-data");
+        let stem = data_export::suggested_file_stem(dataset);
+        let (filter_name, extensions): (&str, &[&str]) = match extension {
+            "xlsx" => ("Excel 工作簿", &["xlsx"]),
+            "tsv" => ("TSV 数据", &["tsv"]),
+            "txt" => ("TXT 数据", &["txt"]),
+            _ => ("CSV 数据", &["csv"]),
+        };
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("CSV 数据", &["csv"])
-            .add_filter("TXT 数据", &["txt"])
-            .set_file_name(format!("{stem}-cleaned.csv"))
+            .add_filter(filter_name, extensions)
+            .set_file_name(format!("{stem}-cleaned.{extension}"))
             .save_file()
         else {
             return;
@@ -188,6 +281,52 @@ impl InstPlotLiteApp {
         match data_export::save_retained_rows(&path, dataset) {
             Ok(row_count) => self.status = format!("已导出 {row_count} 行数据：{}", path.display()),
             Err(error) => self.status = format!("数据导出失败：{error}"),
+        }
+    }
+
+    fn export_all_text(&mut self, format: data_export::TextExportFormat) {
+        if self.datasets.is_empty() {
+            self.status = "请先导入数据".to_owned();
+            return;
+        }
+        let Some(directory) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        match data_export::save_all_text(&directory, &self.datasets, format) {
+            Ok(summary) => {
+                self.status = format!(
+                    "已导出全部 {} 个数据集、共 {} 行：{}",
+                    summary.dataset_count,
+                    summary.row_count,
+                    directory.display()
+                )
+            }
+            Err(error) => self.status = format!("批量数据导出失败：{error}"),
+        }
+    }
+
+    fn export_all_xlsx(&mut self) {
+        if self.datasets.is_empty() {
+            self.status = "请先导入数据".to_owned();
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Excel 工作簿", &["xlsx"])
+            .set_file_name("instplot-all-data.xlsx")
+            .save_file()
+        else {
+            return;
+        };
+        match data_export::save_workbook(&path, &self.datasets) {
+            Ok(summary) => {
+                self.status = format!(
+                    "已导出全部 {} 个数据集、共 {} 行：{}",
+                    summary.dataset_count,
+                    summary.row_count,
+                    path.display()
+                )
+            }
+            Err(error) => self.status = format!("Excel 导出失败：{error}"),
         }
     }
 
@@ -259,6 +398,7 @@ impl InstPlotLiteApp {
         let changed = dataset.delete_rows(&pending.rows);
         let count = changed.len();
         self.history.record_delete(pending.dataset_index, changed);
+        self.fit_overlay = None;
         self.status = format!("已删除 {count} 个点；可使用撤销恢复");
     }
 
@@ -349,6 +489,7 @@ impl InstPlotLiteApp {
             source_column,
             operation,
         );
+        self.fit_overlay = None;
         self.y_column = column_index;
         self.reset_view = true;
         self.visible_x_range = None;
@@ -543,6 +684,334 @@ impl InstPlotLiteApp {
         }
     }
 
+    fn open_fit_window(&mut self) {
+        let Some(dataset) = self.datasets.get(self.active_dataset) else {
+            self.status = "请先导入数据".to_owned();
+            return;
+        };
+        if let Some(range) = dataset
+            .columns
+            .get(self.x_column)
+            .and_then(|column| finite_range(&column.values))
+        {
+            self.fit_settings.x_min = range[0];
+            self.fit_settings.x_max = range[1];
+        }
+        if let Some(range) = dataset
+            .columns
+            .get(self.y_column)
+            .and_then(|column| finite_range(&column.values))
+        {
+            self.fit_settings.y_min = range[0];
+            self.fit_settings.y_max = range[1];
+        }
+        self.fit_settings.unit_conversion = XUnitConversion::None;
+        if let Some(name) = dataset
+            .columns
+            .get(self.x_column)
+            .map(|column| column.name.to_lowercase())
+            && (name.contains("degree")
+                || name.contains("deg")
+                || name.contains('°')
+                || name.contains('度'))
+        {
+            self.fit_settings.unit_conversion = XUnitConversion::DegreesToRadians;
+        }
+        self.fit_open = true;
+    }
+
+    fn collect_fit_values(&self) -> Result<(Vec<f64>, Vec<f64>), String> {
+        let active = self
+            .datasets
+            .get(self.active_dataset)
+            .ok_or_else(|| "请先导入数据".to_owned())?;
+        let x_name = active
+            .columns
+            .get(self.x_column)
+            .map(|column| column.name.as_str())
+            .ok_or_else(|| "当前 X 列不存在".to_owned())?;
+        let y_name = active
+            .columns
+            .get(self.y_column)
+            .map(|column| column.name.as_str())
+            .ok_or_else(|| "当前 Y 列不存在".to_owned())?;
+        let mut x_values = Vec::new();
+        let mut y_values = Vec::new();
+        for (dataset_index, dataset) in self.datasets.iter().enumerate() {
+            if !self.fit_settings.merge_datasets && dataset_index != self.active_dataset {
+                continue;
+            }
+            let x_column = if dataset_index == self.active_dataset {
+                self.x_column
+            } else if let Some(index) = dataset
+                .columns
+                .iter()
+                .position(|column| column.name == x_name)
+            {
+                index
+            } else {
+                continue;
+            };
+            let y_column = if dataset_index == self.active_dataset {
+                self.y_column
+            } else if let Some(index) = dataset
+                .columns
+                .iter()
+                .position(|column| column.name == y_name)
+            {
+                index
+            } else {
+                continue;
+            };
+            for (_, [raw_x, y]) in dataset.row_points(x_column, y_column) {
+                let x = self.fit_settings.unit_conversion.convert(raw_x);
+                if self.fit_settings.use_x_range
+                    && (x < self.fit_settings.x_min.min(self.fit_settings.x_max)
+                        || x > self.fit_settings.x_min.max(self.fit_settings.x_max))
+                {
+                    continue;
+                }
+                if self.fit_settings.use_y_range
+                    && (y < self.fit_settings.y_min.min(self.fit_settings.y_max)
+                        || y > self.fit_settings.y_min.max(self.fit_settings.y_max))
+                {
+                    continue;
+                }
+                x_values.push(x);
+                y_values.push(y);
+            }
+        }
+        if x_values.len() < 2 {
+            return Err("筛选后至少需要两个有效数据点".to_owned());
+        }
+        Ok((x_values, y_values))
+    }
+
+    fn execute_fit(&mut self) {
+        let (x, y) = match self.collect_fit_values() {
+            Ok(values) => values,
+            Err(error) => {
+                self.fit_settings.message = format!("拟合失败：{error}");
+                return;
+            }
+        };
+        let method = match self.fit_settings.kind {
+            FitKind::Polynomial => FitMethod::Polynomial {
+                degree: self.fit_settings.degree,
+            },
+            FitKind::Exponential => FitMethod::Exponential,
+            FitKind::Logarithmic => FitMethod::Logarithmic,
+            FitKind::Power => FitMethod::Power,
+            FitKind::Custom => {
+                let parameters = self
+                    .fit_settings
+                    .initial_parameters
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                let Ok(parameters) = parameters else {
+                    self.fit_settings.message = "拟合失败：初始参数应为逗号分隔的数值".to_owned();
+                    return;
+                };
+                FitMethod::Custom {
+                    expression: self.fit_settings.expression.clone(),
+                    initial_parameters: parameters,
+                }
+            }
+        };
+        match fitting::fit_values(&x, &y, &method) {
+            Ok(mut result) => {
+                for point in &mut result.points {
+                    point[0] = self.fit_settings.unit_conversion.restore(point[0]);
+                }
+                let point_count = x.len();
+                self.fit_settings.message = format!(
+                    "拟合方程：{}\nR² = {:.6}\n使用点数：{point_count}",
+                    result.equation, result.r2
+                );
+                self.status = format!("拟合完成：R² = {:.6}，使用 {point_count} 个点", result.r2);
+                self.fit_overlay = Some(FitOverlay {
+                    points: result.points,
+                    r2: result.r2,
+                });
+            }
+            Err(error) => {
+                self.fit_settings.message = format!("拟合失败：{}", error.reason);
+                self.status = format!("拟合失败：{}", error.reason);
+            }
+        }
+    }
+
+    fn show_fit_window(&mut self, context: &egui::Context) {
+        if !self.fit_open {
+            return;
+        }
+        let mut open = true;
+        let mut execute = false;
+        let mut clear = false;
+        context.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("instplot-lite-fitting"),
+            egui::ViewportBuilder::default()
+                .with_title("InstPlot Lite · 曲线拟合")
+                .with_inner_size([620.0, 520.0])
+                .with_min_inner_size([560.0, 470.0])
+                .with_resizable(true),
+            |ui, _class| {
+                if ui.ctx().input(|input| input.viewport().close_requested()) {
+                    open = false;
+                    return;
+                }
+                let content_rect = ui
+                    .available_rect_before_wrap()
+                    .shrink2(egui::vec2(18.0, 14.0));
+                let mut content_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(content_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                let ui = &mut content_ui;
+                ui.label("使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("数据源");
+                    egui::ComboBox::from_id_salt("fit-source")
+                        .selected_text(if self.fit_settings.merge_datasets {
+                            "全部同名列数据（合并）"
+                        } else {
+                            "当前数据集"
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.fit_settings.merge_datasets,
+                                false,
+                                "当前数据集",
+                            );
+                            ui.selectable_value(
+                                &mut self.fit_settings.merge_datasets,
+                                true,
+                                "全部同名列数据（合并）",
+                            );
+                        });
+                    ui.label("X 单位");
+                    egui::ComboBox::from_id_salt("fit-unit")
+                        .selected_text(unit_conversion_name(self.fit_settings.unit_conversion))
+                        .show_ui(ui, |ui| {
+                            for conversion in [
+                                XUnitConversion::None,
+                                XUnitConversion::DegreesToRadians,
+                                XUnitConversion::RadiansToDegrees,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.fit_settings.unit_conversion,
+                                    conversion,
+                                    unit_conversion_name(conversion),
+                                );
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.fit_settings.use_x_range, "限制 X");
+                    ui.add_enabled(
+                        self.fit_settings.use_x_range,
+                        egui::DragValue::new(&mut self.fit_settings.x_min),
+                    );
+                    ui.label("至");
+                    ui.add_enabled(
+                        self.fit_settings.use_x_range,
+                        egui::DragValue::new(&mut self.fit_settings.x_max),
+                    );
+                    ui.checkbox(&mut self.fit_settings.use_y_range, "限制 Y");
+                    ui.add_enabled(
+                        self.fit_settings.use_y_range,
+                        egui::DragValue::new(&mut self.fit_settings.y_min),
+                    );
+                    ui.label("至");
+                    ui.add_enabled(
+                        self.fit_settings.use_y_range,
+                        egui::DragValue::new(&mut self.fit_settings.y_max),
+                    );
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("拟合类型");
+                    egui::ComboBox::from_id_salt("fit-kind")
+                        .selected_text(fit_kind_name(self.fit_settings.kind))
+                        .show_ui(ui, |ui| {
+                            for kind in [
+                                FitKind::Polynomial,
+                                FitKind::Exponential,
+                                FitKind::Logarithmic,
+                                FitKind::Power,
+                                FitKind::Custom,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.fit_settings.kind,
+                                    kind,
+                                    fit_kind_name(kind),
+                                );
+                            }
+                        });
+                    if self.fit_settings.kind == FitKind::Polynomial {
+                        ui.label("阶数");
+                        ui.add(egui::DragValue::new(&mut self.fit_settings.degree).range(1..=10));
+                    }
+                });
+                if self.fit_settings.kind == FitKind::Custom {
+                    ui.add_space(6.0);
+                    editable_fit_field(
+                        ui,
+                        "函数表达式（可编辑）",
+                        "f(x) =",
+                        &mut self.fit_settings.expression,
+                        "例如：a * sin(b * x + c)",
+                    );
+                    ui.add_space(8.0);
+                    editable_fit_field(
+                        ui,
+                        "初始参数（可编辑）",
+                        "a, b, c… =",
+                        &mut self.fit_settings.initial_parameters,
+                        "例如：1, 1, 0",
+                    );
+                    ui.small("参数按 a、b、c、d、e_param、f、g、h 的顺序填写，用逗号分隔。");
+                    ui.small("支持 + - * / ^、sin、cos、tan、exp、ln/log、sqrt、abs。");
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(egui::RichText::new("执行拟合").strong())
+                        .clicked()
+                    {
+                        execute = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            self.fit_overlay.is_some(),
+                            egui::Button::new("清除拟合曲线"),
+                        )
+                        .clicked()
+                    {
+                        clear = true;
+                    }
+                });
+                ui.add_space(8.0);
+                ui.label(&self.fit_settings.message);
+            },
+        );
+        self.fit_open = open;
+        if execute {
+            self.execute_fit();
+            context.request_repaint();
+        }
+        if clear {
+            self.fit_overlay = None;
+            self.fit_settings.message = "拟合曲线已清除。".to_owned();
+            self.status = "已清除拟合曲线".to_owned();
+        }
+    }
+
     fn clamp_columns(&mut self) {
         let count = self
             .datasets
@@ -626,6 +1095,7 @@ impl InstPlotLiteApp {
         if self.active_dataset != previous_dataset {
             self.clamp_columns();
             self.reset_after_coordinate_change();
+            self.fit_overlay = None;
         }
 
         let column_names = self.column_names();
@@ -666,6 +1136,7 @@ impl InstPlotLiteApp {
         }
         if (self.x_column, self.y_column) != previous_columns {
             self.reset_after_coordinate_change();
+            self.fit_overlay = None;
             let x_name = column_names
                 .get(self.x_column)
                 .map(String::as_str)
@@ -689,6 +1160,8 @@ impl InstPlotLiteApp {
         self.history.clear();
         self.pending_deletion = None;
         self.processing_open = false;
+        self.fit_open = false;
+        self.fit_overlay = None;
         self.selected_coordinate = None;
         self.status = "已清空数据".to_owned();
     }
@@ -704,6 +1177,7 @@ impl InstPlotLiteApp {
 
     fn undo(&mut self) {
         if let Some(effect) = self.history.undo(&mut self.datasets) {
+            self.fit_overlay = None;
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已撤销，恢复 {count} 个点"),
@@ -714,6 +1188,7 @@ impl InstPlotLiteApp {
 
     fn redo(&mut self) {
         if let Some(effect) = self.history.redo(&mut self.datasets) {
+            self.fit_overlay = None;
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已重做，删除 {count} 个点"),
@@ -767,12 +1242,45 @@ impl eframe::App for InstPlotLiteApp {
             if ui.button("导出图片").clicked() {
                 self.request_plot_png(ui.ctx());
             }
-            if ui
-                .add_enabled(!self.datasets.is_empty(), egui::Button::new("导出数据"))
-                .clicked()
-            {
-                self.export_active_data();
-            }
+            ui.add_enabled_ui(!self.datasets.is_empty(), |ui| {
+                ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
+                    ui.label(egui::RichText::new("当前数据集").strong());
+                    if ui.button("CSV").clicked() {
+                        ui.close();
+                        self.export_active_data("csv");
+                    }
+                    if ui.button("Excel（XLSX）").clicked() {
+                        ui.close();
+                        self.export_active_data("xlsx");
+                    }
+                    if ui.button("TSV").clicked() {
+                        ui.close();
+                        self.export_active_data("tsv");
+                    }
+                    if ui.button("TXT（制表符分隔）").clicked() {
+                        ui.close();
+                        self.export_active_data("txt");
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("全部数据集").strong());
+                    if ui.button("一个 Excel 工作簿").clicked() {
+                        ui.close();
+                        self.export_all_xlsx();
+                    }
+                    if ui.button("多个 CSV 文件").clicked() {
+                        ui.close();
+                        self.export_all_text(data_export::TextExportFormat::Csv);
+                    }
+                    if ui.button("多个 TSV 文件").clicked() {
+                        ui.close();
+                        self.export_all_text(data_export::TextExportFormat::Tsv);
+                    }
+                    if ui.button("多个 TXT 文件").clicked() {
+                        ui.close();
+                        self.export_all_text(data_export::TextExportFormat::Txt);
+                    }
+                });
+            });
             if ui
                 .add_enabled(
                     !self.datasets.is_empty(),
@@ -781,6 +1289,15 @@ impl eframe::App for InstPlotLiteApp {
                 .clicked()
             {
                 self.open_processing_window();
+            }
+            if ui
+                .add_enabled(
+                    !self.datasets.is_empty(),
+                    egui::Button::new(egui::RichText::new("曲线拟合").strong()),
+                )
+                .clicked()
+            {
+                self.open_fit_window();
             }
             if ui
                 .add_enabled(self.history.can_undo(), egui::Button::new("← 撤销"))
@@ -853,7 +1370,7 @@ impl eframe::App for InstPlotLiteApp {
                 });
             });
 
-        let plot_height = ui.available_height().max(220.0);
+        let plot_height = (ui.available_height() - PLOT_BOTTOM_GUTTER).max(220.0);
         let mut plot = Plot::new("main-plot")
             .legend(Legend::default())
             .height(plot_height)
@@ -946,9 +1463,20 @@ impl eframe::App for InstPlotLiteApp {
                         );
                     }
                 }
+                if let Some(fit) = &self.fit_overlay {
+                    plot_ui.line(
+                        Line::new(format!("拟合 R²={:.4}", fit.r2), fit.points.clone())
+                            .color(Color32::from_rgb(255, 196, 64))
+                            .width(2.5),
+                    );
+                }
             })
         });
-        self.last_export_rect = Some(plot_row.response.rect);
+        ui.add_space(PLOT_BOTTOM_GUTTER);
+        self.last_export_rect = Some(Rect::from_min_max(
+            plot_row.response.rect.min,
+            plot_row.response.rect.max + egui::vec2(0.0, PLOT_BOTTOM_GUTTER),
+        ));
         let response = plot_row.inner;
         self.last_plot_rect = Some(response.response.rect);
         let bounds = response.transform.bounds();
@@ -1046,6 +1574,7 @@ impl eframe::App for InstPlotLiteApp {
         }
         self.show_delete_confirmation(ui.ctx());
         self.show_processing_window(ui.ctx());
+        self.show_fit_window(ui.ctx());
     }
 }
 
@@ -1065,11 +1594,11 @@ fn configure_interface_style(context: &egui::Context) {
 
         style.text_styles.insert(
             TextStyle::Small,
-            FontId::new(13.0, FontFamily::Proportional),
+            FontId::new(14.0, FontFamily::Proportional),
         );
         style
             .text_styles
-            .insert(TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
+            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Button,
             FontId::new(15.0, FontFamily::Proportional),
@@ -1084,6 +1613,11 @@ fn configure_interface_style(context: &egui::Context) {
         );
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
         style.spacing.interact_size.y = 32.0;
+        style.visuals.selection.bg_fill = Color32::from_gray(78);
+        style.visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+        style.visuals.hyperlink_color = Color32::from_gray(210);
+        style.visuals.warn_fg_color = Color32::from_gray(220);
+        style.visuals.error_fg_color = Color32::WHITE;
         let radius = egui::CornerRadius::same(8);
         style.visuals.widgets.inactive.corner_radius = radius;
         style.visuals.widgets.hovered.corner_radius = radius;
@@ -1119,6 +1653,62 @@ fn anchor_name(anchor: Anchor) -> &'static str {
         Anchor::Left => "左侧",
         Anchor::Right => "右侧",
         Anchor::Center => "中心",
+    }
+}
+
+fn fit_kind_name(kind: FitKind) -> &'static str {
+    match kind {
+        FitKind::Polynomial => "多项式",
+        FitKind::Exponential => "指数 y=a·exp(bx)",
+        FitKind::Logarithmic => "对数 y=a·ln(x)+b",
+        FitKind::Power => "幂函数 y=a·x^b",
+        FitKind::Custom => "自定义函数",
+    }
+}
+
+fn editable_fit_field(
+    ui: &mut egui::Ui,
+    title: &str,
+    prefix: &str,
+    value: &mut String,
+    hint: &str,
+) {
+    let accent = Color32::from_gray(132);
+    egui::Frame::new()
+        .fill(Color32::from_gray(31))
+        .stroke(Stroke::new(1.5, accent))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(title)
+                    .strong()
+                    .color(Color32::from_gray(232)),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(prefix).strong());
+                ui.scope(|ui| {
+                    ui.visuals_mut().widgets.inactive.bg_fill = Color32::from_gray(56);
+                    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.2, accent);
+                    ui.visuals_mut().widgets.hovered.bg_stroke =
+                        Stroke::new(1.8, Color32::from_gray(184));
+                    ui.visuals_mut().widgets.active.bg_stroke = Stroke::new(2.0, Color32::WHITE);
+                    let width = ui.available_width().max(180.0);
+                    ui.add_sized(
+                        [width, 34.0],
+                        egui::TextEdit::singleline(value).hint_text(hint),
+                    );
+                });
+            });
+        });
+}
+
+fn unit_conversion_name(conversion: XUnitConversion) -> &'static str {
+    match conversion {
+        XUnitConversion::None => "不转换",
+        XUnitConversion::DegreesToRadians => "角度 → 弧度",
+        XUnitConversion::RadiansToDegrees => "弧度 → 角度",
     }
 }
 

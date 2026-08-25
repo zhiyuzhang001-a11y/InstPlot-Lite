@@ -198,6 +198,7 @@ mod tests {
     fn dataset() -> DataSet {
         DataSet {
             source: PathBuf::from("sample.csv"),
+            label: None,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![
