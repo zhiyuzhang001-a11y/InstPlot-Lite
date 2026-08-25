@@ -42,7 +42,9 @@ fn encode_plot_png(
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in top..bottom {
         for x in left..right {
-            rgba.extend_from_slice(&image.pixels[y * image_width + x].to_srgba_unmultiplied());
+            rgba.extend_from_slice(&light_export_rgba(
+                image.pixels[y * image_width + x].to_srgba_unmultiplied(),
+            ));
         }
     }
 
@@ -59,9 +61,25 @@ fn encode_plot_png(
     Ok(output)
 }
 
+fn light_export_rgba([red, green, blue, alpha]: [u8; 4]) -> [u8; 4] {
+    let maximum = red.max(green).max(blue);
+    let minimum = red.min(green).min(blue);
+
+    // Plot chrome (background, grid, axes, labels, and legend) is neutral gray.
+    // Map bright text to black and darker chrome to white/light gray while
+    // leaving colored data series unchanged.
+    if maximum - minimum <= 12 {
+        let gray = ((u16::from(red) + u16::from(green) + u16::from(blue)) / 3) as u8;
+        let export_gray = if gray >= 128 { 0 } else { 255 - gray / 2 };
+        [export_gray, export_gray, export_gray, alpha]
+    } else {
+        [red, green, blue, alpha]
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::encode_plot_png;
+    use super::{encode_plot_png, light_export_rgba};
     use eframe::egui::{Color32, ColorImage, Rect, pos2};
 
     #[test]
@@ -74,5 +92,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn light_export_inverts_neutral_plot_chrome() {
+        assert_eq!(light_export_rgba([0, 0, 0, 255]), [255, 255, 255, 255]);
+        assert_eq!(light_export_rgba([255, 255, 255, 255]), [0, 0, 0, 255]);
+        assert_eq!(light_export_rgba([64, 64, 64, 128]), [223, 223, 223, 128]);
+        assert_eq!(light_export_rgba([180, 180, 180, 255]), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn light_export_preserves_colored_series() {
+        assert_eq!(light_export_rgba([214, 79, 79, 255]), [214, 79, 79, 255]);
+        assert_eq!(light_export_rgba([76, 145, 222, 192]), [76, 145, 222, 192]);
     }
 }

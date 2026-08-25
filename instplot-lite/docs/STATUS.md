@@ -28,7 +28,8 @@ a terminal.
 - Native XLSX/XLS import maps each valid numeric worksheet to an independent
   dataset and skips empty or notes-only worksheets without requiring Excel.
 - File-picker and drag-and-drop import are connected to the native interface.
-- PNG export captures the complete plot, tick values, X/Y labels, and legend;
+- PNG export captures the complete plot, tick values, X/Y labels, and legend on
+  a white background with black labels/ticks, light-gray grids, and unchanged data-series colors;
   it excludes the toolbar, sidebar, and status bar.
 - Retained numeric rows can be exported from the active dataset as CSV, XLSX,
   TSV, or tab-delimited TXT; deleted rows are omitted by design. All datasets
