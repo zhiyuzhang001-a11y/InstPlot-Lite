@@ -150,11 +150,14 @@ pub struct InstPlotLiteApp {
     selection_start: Option<egui::Pos2>,
     selection_current: Option<egui::Pos2>,
     processing_open: bool,
+    processing_native_theme_applied: bool,
     processing_settings: ProcessingSettings,
     fit_open: bool,
+    fit_native_theme_applied: bool,
     fit_settings: FitSettings,
     fit_overlay: Option<FitOverlay>,
     selected_coordinate: Option<[f64; 2]>,
+    root_native_theme_applied: bool,
     status: String,
 }
 
@@ -184,11 +187,14 @@ impl InstPlotLiteApp {
             selection_start: None,
             selection_current: None,
             processing_open: false,
+            processing_native_theme_applied: false,
             processing_settings: ProcessingSettings::default(),
             fit_open: false,
+            fit_native_theme_applied: false,
             fit_settings: FitSettings::default(),
             fit_overlay: None,
             selected_coordinate: None,
+            root_native_theme_applied: false,
             status: "打开或拖入数据：TXT、CSV、DAT、TSV、XLSX、XLS".to_owned(),
         };
         if !startup_files.is_empty() {
@@ -449,6 +455,7 @@ impl InstPlotLiteApp {
             self.processing_settings.denoise_min = minimum;
             self.processing_settings.denoise_max = maximum;
         }
+        self.processing_native_theme_applied = false;
         self.processing_open = true;
     }
 
@@ -502,8 +509,16 @@ impl InstPlotLiteApp {
         }
         let mut open = true;
         let mut requested: Option<(ProcessingOperation, String)> = None;
+        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-processing");
+        if !self.processing_native_theme_applied {
+            context.send_viewport_cmd_to(
+                viewport_id,
+                egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
+            );
+            self.processing_native_theme_applied = true;
+        }
         context.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("instplot-lite-processing"),
+            viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 数据处理")
                 .with_inner_size([570.0, 455.0])
@@ -717,6 +732,7 @@ impl InstPlotLiteApp {
         {
             self.fit_settings.unit_conversion = XUnitConversion::DegreesToRadians;
         }
+        self.fit_native_theme_applied = false;
         self.fit_open = true;
     }
 
@@ -851,8 +867,16 @@ impl InstPlotLiteApp {
         let mut open = true;
         let mut execute = false;
         let mut clear = false;
+        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-fitting");
+        if !self.fit_native_theme_applied {
+            context.send_viewport_cmd_to(
+                viewport_id,
+                egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
+            );
+            self.fit_native_theme_applied = true;
+        }
         context.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("instplot-lite-fitting"),
+            viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 曲线拟合")
                 .with_inner_size([620.0, 520.0])
@@ -1200,6 +1224,11 @@ impl InstPlotLiteApp {
 
 impl eframe::App for InstPlotLiteApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.root_native_theme_applied {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+            self.root_native_theme_applied = true;
+        }
         self.handle_screenshot_result(ui.ctx());
         let undo_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
         let redo_shortcut = egui::KeyboardShortcut::new(
