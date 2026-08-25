@@ -27,6 +27,12 @@ Linux x64. End users do not need Rust, Cargo, Python, or a terminal.
 - Debian/Ubuntu: download and open the DEB with the graphical package manager.
 - Other compatible x64 Linux systems: use the portable tar archive.
 
+Uninstallation is clean because InstPlot Lite does not create a user database,
+saved settings, logs, or application caches. On Windows, uninstall it from
+**Settings > Apps**; on macOS, move **InstPlot Lite.app** to the Trash; on
+Debian/Ubuntu, use the graphical package manager's **Remove** action; for the
+portable Linux archive, delete its extracted folder.
+
 The preview packages are not yet signed with Apple and Microsoft developer
 certificates, so macOS Gatekeeper or Windows SmartScreen may display a warning
 on first launch. Checksums are published with the release notes.

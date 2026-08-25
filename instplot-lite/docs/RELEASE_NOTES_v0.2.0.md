@@ -20,6 +20,10 @@ Python, Rust, Microsoft Excel, or a terminal.
   bottom spacing, coordinate display, and movable processing/fitting windows.
 - Preserved point deletion, rectangle deletion, zoom, pan, undo/redo, data
   processing, PNG export, and strict column-alignment validation.
+- Clean removal is supported on every platform: Windows and Debian/Ubuntu use
+  their normal graphical uninstall controls, macOS users move the app to the
+  Trash, and portable Linux users delete the extracted folder. The app creates
+  no settings database, logs, or caches outside its installation location.
 
 ## Validation
 
