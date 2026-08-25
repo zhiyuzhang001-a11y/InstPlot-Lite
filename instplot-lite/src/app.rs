@@ -1589,6 +1589,10 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
 }
 
 fn configure_interface_style(context: &egui::Context) {
+    // InstPlot Lite is designed as a dark interface. Following the operating
+    // system theme here can mix light panels with explicitly dark plot chrome,
+    // which also makes labels unreadable on Windows in light mode.
+    context.set_theme(egui::Theme::Dark);
     context.all_styles_mut(|style| {
         use egui::{FontFamily, FontId, TextStyle};
 
@@ -1768,7 +1772,19 @@ fn series_color(index: usize) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::demo_curve;
+    use super::{configure_interface_style, demo_curve};
+    use eframe::egui;
+
+    #[test]
+    fn interface_style_always_uses_dark_theme() {
+        let context = egui::Context::default();
+        context.set_theme(egui::Theme::Light);
+
+        configure_interface_style(&context);
+
+        assert_eq!(context.theme(), egui::Theme::Dark);
+        assert!(context.global_style().visuals.dark_mode);
+    }
 
     #[test]
     fn demo_curve_has_requested_number_of_finite_points() {
