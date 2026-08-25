@@ -21,6 +21,10 @@ fi
 
 test -x "$project_dir/target/release/instplot-lite"
 test -f "$repository_dir/InP_logo.png"
+test -f "$repository_dir/LICENSE"
+test -f "$project_dir/THIRD_PARTY_NOTICES.md"
+test -f "$project_dir/assets/OFL-Liberation.txt"
+test -f "$project_dir/assets/OFL.txt"
 
 stage_dir="$package_dir/linux-stage-$deb_arch"
 portable_dir="$package_dir/InstPlot-Lite-$version-linux-$machine_arch"
@@ -35,8 +39,8 @@ mkdir -p \
     "$stage_dir/usr/bin" \
     "$stage_dir/usr/share/applications" \
     "$stage_dir/usr/share/icons/hicolor/512x512/apps" \
-    "$stage_dir/usr/share/doc/instplot-lite" \
-    "$portable_dir"
+    "$stage_dir/usr/share/doc/instplot-lite/licenses" \
+    "$portable_dir/licenses"
 
 install -m 755 "$project_dir/target/release/instplot-lite" "$stage_dir/usr/bin/instplot-lite"
 install -m 644 "$script_dir/instplot-lite.desktop" \
@@ -44,6 +48,12 @@ install -m 644 "$script_dir/instplot-lite.desktop" \
 install -m 644 "$repository_dir/InP_logo.png" \
     "$stage_dir/usr/share/icons/hicolor/512x512/apps/instplot-lite.png"
 install -m 644 "$repository_dir/LICENSE" "$stage_dir/usr/share/doc/instplot-lite/copyright"
+install -m 644 "$project_dir/THIRD_PARTY_NOTICES.md" \
+    "$stage_dir/usr/share/doc/instplot-lite/THIRD_PARTY_NOTICES.md"
+install -m 644 "$project_dir/assets/OFL-Liberation.txt" \
+    "$stage_dir/usr/share/doc/instplot-lite/licenses/OFL-Liberation.txt"
+install -m 644 "$project_dir/assets/OFL.txt" \
+    "$stage_dir/usr/share/doc/instplot-lite/licenses/OFL-Noto-Sans-SC.txt"
 
 installed_size=$(du -sk "$stage_dir/usr" | cut -f1)
 cat > "$stage_dir/DEBIAN/control" <<EOF
@@ -63,7 +73,13 @@ EOF
 
 dpkg-deb --build --root-owner-group "$stage_dir" "$deb_path"
 install -m 755 "$project_dir/target/release/instplot-lite" "$portable_dir/instplot-lite"
-install -m 644 "$repository_dir/LICENSE" "$portable_dir/LICENSE"
+install -m 644 "$repository_dir/LICENSE" "$portable_dir/licenses/LICENSE.txt"
+install -m 644 "$project_dir/THIRD_PARTY_NOTICES.md" \
+    "$portable_dir/licenses/THIRD_PARTY_NOTICES.md"
+install -m 644 "$project_dir/assets/OFL-Liberation.txt" \
+    "$portable_dir/licenses/OFL-Liberation.txt"
+install -m 644 "$project_dir/assets/OFL.txt" \
+    "$portable_dir/licenses/OFL-Noto-Sans-SC.txt"
 tar -C "$package_dir" -czf "$portable_path" "$(basename "$portable_dir")"
 dpkg-deb --info "$deb_path" >/dev/null
 

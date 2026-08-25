@@ -157,6 +157,10 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP "InstPlotLiteSmoke"
           $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir"
           if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          @("LICENSE.txt", "THIRD_PARTY_NOTICES.md", "OFL-Liberation.txt", "OFL-Noto-Sans-SC.txt") | ForEach-Object {
+            $licensePath = Join-Path $installDir "licenses\$_"
+            if (-not (Test-Path $licensePath)) { throw "Installed license file missing: $licensePath" }
+          }
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Installed executable smoke check failed" }
           $uninstaller = Join-Path $installDir "unins000.exe"
@@ -202,7 +206,15 @@ jobs:
       - name: Install and verify DEB
         run: |
           sudo apt-get install -y ./target/package/*.deb
+          test -f /usr/share/doc/instplot-lite/copyright
+          test -f /usr/share/doc/instplot-lite/THIRD_PARTY_NOTICES.md
+          test -f /usr/share/doc/instplot-lite/licenses/OFL-Liberation.txt
+          test -f /usr/share/doc/instplot-lite/licenses/OFL-Noto-Sans-SC.txt
           /usr/bin/instplot-lite --check tests/fixtures/smoke.csv
+          tar -tzf ./target/package/*.tar.gz | grep -q '/licenses/LICENSE.txt$'
+          tar -tzf ./target/package/*.tar.gz | grep -q '/licenses/THIRD_PARTY_NOTICES.md$'
+          tar -tzf ./target/package/*.tar.gz | grep -q '/licenses/OFL-Liberation.txt$'
+          tar -tzf ./target/package/*.tar.gz | grep -q '/licenses/OFL-Noto-Sans-SC.txt$'
           sudo apt-get remove -y instplot-lite
 
       - name: Upload Linux packages

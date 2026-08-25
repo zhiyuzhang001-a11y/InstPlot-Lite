@@ -11,6 +11,7 @@ app_name="InstPlot Lite"
 app_dir="$package_dir/$app_name.app"
 contents_dir="$app_dir/Contents"
 resources_dir="$contents_dir/Resources"
+licenses_dir="$resources_dir/Licenses"
 macos_dir="$contents_dir/MacOS"
 iconset_dir="$package_dir/InstPlotLite.iconset"
 dmg_root="$package_dir/dmg-root"
@@ -23,14 +24,25 @@ fi
 
 test -x "$project_dir/target/release/instplot-lite"
 test -f "$repository_dir/InP_logo.png"
+test -f "$repository_dir/LICENSE"
+test -f "$project_dir/THIRD_PARTY_NOTICES.md"
+test -f "$project_dir/assets/OFL-Liberation.txt"
+test -f "$project_dir/assets/OFL.txt"
 
 mkdir -p "$package_dir"
 rm -rf "$app_dir" "$iconset_dir" "$dmg_root"
 rm -f "$dmg_path"
-mkdir -p "$macos_dir" "$resources_dir" "$iconset_dir" "$dmg_root"
+mkdir -p "$macos_dir" "$licenses_dir" "$iconset_dir" "$dmg_root"
 
 cp "$project_dir/target/release/instplot-lite" "$macos_dir/instplot-lite"
 chmod 755 "$macos_dir/instplot-lite"
+install -m 644 "$repository_dir/LICENSE" "$licenses_dir/LICENSE.txt"
+install -m 644 "$project_dir/THIRD_PARTY_NOTICES.md" \
+    "$licenses_dir/THIRD_PARTY_NOTICES.md"
+install -m 644 "$project_dir/assets/OFL-Liberation.txt" \
+    "$licenses_dir/OFL-Liberation.txt"
+install -m 644 "$project_dir/assets/OFL.txt" \
+    "$licenses_dir/OFL-Noto-Sans-SC.txt"
 
 for icon_size in 16 32 128 256 512; do
     retina_size=$((icon_size * 2))
@@ -82,6 +94,7 @@ codesign --verify --deep --strict "$app_dir"
 "$macos_dir/instplot-lite" --check "$project_dir/tests/fixtures/smoke.csv"
 
 ditto "$app_dir" "$dmg_root/$app_name.app"
+ditto "$licenses_dir" "$dmg_root/Licenses"
 ln -s /Applications "$dmg_root/Applications"
 hdiutil create -quiet -fs HFS+ -format UDBZ -volname "$app_name" \
     -srcfolder "$dmg_root" "$dmg_path"

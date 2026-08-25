@@ -71,6 +71,10 @@ a terminal.
 - Native packaging definitions now cover macOS DMG, Windows Inno Setup, Linux
   DEB, and a Linux portable archive. The CI workflow builds and smoke-tests
   these artifacts on their native operating systems.
+- A consolidated `THIRD_PARTY_NOTICES` file and the complete MIT, Liberation
+  Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
+  CI verifies the installed Windows and Linux license files; the macOS DMG keeps
+  them both in a visible folder and inside the installed app bundle.
 - Forty-four local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
