@@ -713,6 +713,7 @@ mod tests {
     fn dataset(x: &[f64], y: &[f64]) -> DataSet {
         DataSet {
             source: PathBuf::from("processing.csv"),
+            label: None,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![

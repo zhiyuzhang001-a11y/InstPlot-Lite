@@ -57,8 +57,8 @@ Maintainer: InstPlot Project <noreply@github.com>
 Depends: libc6 (>= 2.35), libgcc-s1, libgl1, libx11-6, libxcursor1, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libwayland-client0
 Recommends: xdg-desktop-portal, xdg-desktop-portal-gtk
 Description: Lightweight native numeric data plotter
- InstPlot Lite imports TXT, CSV, and DAT instrument data, draws point-line
- curves, supports point deletion with undo/redo, and exports data and PNG files.
+ InstPlot Lite imports text and Excel instrument data, draws point-line curves,
+ supports point deletion with undo/redo, and exports data and PNG files.
 EOF
 
 dpkg-deb --build --root-owner-group "$stage_dir" "$deb_path"

@@ -1,10 +1,12 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use calamine::{Data, DataType, Reader, open_workbook_auto};
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::{GBK, UTF_16BE, UTF_16LE};
 
-const SUPPORTED_EXTENSIONS: &[&str] = &["txt", "csv", "dat"];
+const TEXT_EXTENSIONS: &[&str] = &["txt", "csv", "dat", "tsv"];
+const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xls"];
 
 #[derive(Clone, Debug)]
 pub struct NumericColumn {
@@ -15,6 +17,7 @@ pub struct NumericColumn {
 #[derive(Clone, Debug)]
 pub struct DataSet {
     pub source: PathBuf,
+    pub label: Option<String>,
     pub encoding: String,
     pub separator: String,
     pub columns: Vec<NumericColumn>,
@@ -24,6 +27,9 @@ pub struct DataSet {
 
 impl DataSet {
     pub fn display_name(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         self.source
             .file_name()
             .and_then(|name| name.to_str())
@@ -231,21 +237,209 @@ impl Separator {
     }
 }
 
-pub fn read_data_file(path: &Path) -> Result<DataSet, ImportError> {
+pub fn read_data_file(path: &Path) -> Result<Vec<DataSet>, ImportError> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    if !SUPPORTED_EXTENSIONS.contains(&extension.as_str()) {
+    if SPREADSHEET_EXTENSIONS.contains(&extension.as_str()) {
+        return read_spreadsheet(path);
+    }
+    if !TEXT_EXTENSIONS.contains(&extension.as_str()) {
         return Err(ImportError::new(
             "unsupported_extension",
-            format!("仅支持 TXT、CSV 和 DAT，收到 .{extension}"),
+            format!("仅支持 TXT、CSV、DAT、TSV、XLSX 和 XLS，收到 .{extension}"),
         ));
     }
     let bytes = std::fs::read(path)
         .map_err(|error| ImportError::new("file_read_failed", error.to_string()))?;
-    read_data_bytes(path, &bytes)
+    read_data_bytes(path, &bytes).map(|dataset| vec![dataset])
+}
+
+fn read_spreadsheet(path: &Path) -> Result<Vec<DataSet>, ImportError> {
+    let mut workbook = open_workbook_auto(path)
+        .map_err(|error| ImportError::new("spreadsheet_open_failed", error.to_string()))?;
+    let sheet_names = workbook.sheet_names();
+    let has_multiple_sheets = sheet_names.len() > 1;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名工作簿");
+    let mut datasets = Vec::new();
+
+    for sheet_name in sheet_names {
+        let range = workbook.worksheet_range(&sheet_name).map_err(|error| {
+            ImportError::new(
+                "spreadsheet_sheet_failed",
+                format!("工作表“{sheet_name}”读取失败：{error}"),
+            )
+        })?;
+        match spreadsheet_range_to_dataset(path, &sheet_name, &range) {
+            Ok(mut dataset) => {
+                if has_multiple_sheets {
+                    dataset.label = Some(format!("{file_name} — {sheet_name}"));
+                }
+                datasets.push(dataset);
+            }
+            Err(error)
+                if matches!(
+                    error.code,
+                    "empty_file" | "no_numeric_data" | "insufficient_numeric_columns"
+                ) => {}
+            Err(error) => {
+                return Err(ImportError {
+                    reason: format!("工作表“{sheet_name}”：{}", error.reason),
+                    ..error
+                });
+            }
+        }
+    }
+
+    if datasets.is_empty() {
+        return Err(ImportError::new(
+            "spreadsheet_no_numeric_data",
+            "工作簿中没有包含至少两个数值列的工作表",
+        ));
+    }
+    Ok(datasets)
+}
+
+fn spreadsheet_range_to_dataset(
+    path: &Path,
+    sheet_name: &str,
+    range: &calamine::Range<Data>,
+) -> Result<DataSet, ImportError> {
+    let rows: Vec<&[Data]> = range.rows().collect();
+    if rows.is_empty() {
+        return Err(ImportError::new("empty_file", "工作表为空"));
+    }
+    let (data_position, column_count) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(position, row)| {
+            // A worksheet is already a rectangular grid. Keep its full used
+            // width so an empty value in the first numeric row cannot shift or
+            // discard a later column.
+            let width = row.len();
+            let numeric_count = row[..width]
+                .iter()
+                .filter(|cell| spreadsheet_finite_number(cell).is_some())
+                .count();
+            (width >= 2 && numeric_count >= 2).then_some((position, width))
+        })
+        .ok_or_else(|| ImportError::new("no_numeric_data", "未找到至少两列数值数据"))?;
+
+    let matching_header_position = (0..data_position).rev().find(|position| {
+        let row = rows[*position];
+        spreadsheet_row_width(row) == column_count
+            && row[..column_count]
+                .iter()
+                .any(|cell| !cell.is_empty() && spreadsheet_number(cell).is_none())
+    });
+    let adjacent_header_position = data_position.checked_sub(1).filter(|position| {
+        let row = rows[*position];
+        spreadsheet_row_width(row) >= 2
+            && row
+                .iter()
+                .take(column_count)
+                .any(|cell| !cell.is_empty() && spreadsheet_number(cell).is_none())
+    });
+    let header_position = matching_header_position.or(adjacent_header_position);
+    let headers = header_position.map_or_else(
+        || {
+            (1..=column_count)
+                .map(|index| format!("Column {index}"))
+                .collect::<Vec<_>>()
+        },
+        |position| {
+            rows[position][..column_count]
+                .iter()
+                .enumerate()
+                .map(|(index, cell)| {
+                    let name = clean_header(&spreadsheet_cell_text(cell));
+                    if name.is_empty() {
+                        format!("Column {}", index + 1)
+                    } else {
+                        name
+                    }
+                })
+                .collect()
+        },
+    );
+
+    let mut values = vec![Vec::new(); column_count];
+    let mut numeric_counts = vec![0_usize; column_count];
+    for (row_index, row) in rows.iter().enumerate().skip(data_position) {
+        let width = spreadsheet_row_width(row);
+        if width > column_count {
+            return Err(ImportError::at_line(
+                "column_count_mismatch",
+                row_index + 1,
+                format!(
+                    "该行有 {width} 列，但首行数据定义了 {column_count} 列；为防止列名错位，工作表未导入"
+                ),
+            ));
+        }
+        for column_index in 0..column_count {
+            let number = row
+                .get(column_index)
+                .and_then(spreadsheet_number)
+                .unwrap_or(f64::NAN);
+            if number.is_finite() {
+                numeric_counts[column_index] += 1;
+            }
+            values[column_index].push(number);
+        }
+    }
+
+    let row_count = values.first().map(Vec::len).unwrap_or(0);
+    let columns: Vec<NumericColumn> = headers
+        .into_iter()
+        .zip(values)
+        .zip(numeric_counts)
+        .filter_map(|((name, values), numeric_count)| {
+            (numeric_count > 0).then_some(NumericColumn { name, values })
+        })
+        .collect();
+    if columns.len() < 2 {
+        return Err(ImportError::new(
+            "insufficient_numeric_columns",
+            format!("只识别到 {} 个数值列，绘图至少需要两个", columns.len()),
+        ));
+    }
+
+    Ok(DataSet {
+        source: path.to_path_buf(),
+        label: None,
+        encoding: "Excel 工作簿".to_owned(),
+        separator: format!("工作表 {sheet_name}"),
+        columns,
+        row_count,
+        alive: vec![true; row_count],
+    })
+}
+
+fn spreadsheet_row_width(row: &[Data]) -> usize {
+    row.iter()
+        .rposition(|cell| !cell.is_empty())
+        .map_or(0, |index| index + 1)
+}
+
+fn spreadsheet_finite_number(cell: &Data) -> Option<f64> {
+    spreadsheet_number(cell).filter(|number| number.is_finite())
+}
+
+fn spreadsheet_number(cell: &Data) -> Option<f64> {
+    cell.as_f64().or_else(|| match cell {
+        Data::String(value) => parse_number(value),
+        Data::Empty => Some(f64::NAN),
+        _ => None,
+    })
+}
+
+fn spreadsheet_cell_text(cell: &Data) -> String {
+    cell.to_string().replace(['\r', '\n'], " ")
 }
 
 fn read_data_bytes(path: &Path, bytes: &[u8]) -> Result<DataSet, ImportError> {
@@ -405,6 +599,7 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
 
     Ok(DataSet {
         source: path.to_path_buf(),
+        label: None,
         encoding,
         separator: separator.label(),
         columns,
@@ -490,11 +685,60 @@ fn clean_header(header: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportError, read_data_bytes};
-    use std::path::Path;
+    use super::{ImportError, read_data_bytes, read_data_file};
+    use rust_xlsxwriter::Workbook;
+    use std::path::{Path, PathBuf};
 
     fn parse(content: &[u8]) -> Result<super::DataSet, ImportError> {
         read_data_bytes(Path::new("sample.txt"), content)
+    }
+
+    fn temporary_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("instplot-lite-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn tsv_extension_uses_the_existing_strict_text_parser() {
+        let path = temporary_path("extension.tsv");
+        std::fs::write(&path, b"x\ty\n1\t2\n3\t4\n").unwrap();
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].columns[1].values, [2.0, 4.0]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spreadsheet_import_skips_notes_and_keeps_each_numeric_sheet() {
+        let path = temporary_path("multiple-sheets.xlsx");
+        let mut workbook = Workbook::new();
+        let notes = workbook.add_worksheet();
+        notes.set_name("Notes").unwrap();
+        notes.write_string(0, 0, "operator notes").unwrap();
+        for sheet_name in ["Forward", "Reverse"] {
+            let sheet = workbook.add_worksheet();
+            sheet.set_name(sheet_name).unwrap();
+            sheet.write_string(0, 0, "Field").unwrap();
+            sheet.write_string(0, 1, "Signal").unwrap();
+            sheet.write_number(1, 0, 1.0).unwrap();
+            sheet.write_number(1, 1, 2.0).unwrap();
+        }
+        workbook.save(&path).unwrap();
+
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets.len(), 2);
+        assert!(datasets[0].display_name().contains("Forward"));
+        assert!(datasets[1].display_name().contains("Reverse"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn imports_the_legacy_xls_fixture() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/data_io/legacy-sample.xls");
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].columns[0].name, "磁场");
+        assert_eq!(datasets[0].columns[1].name, "信号");
     }
 
     #[test]
