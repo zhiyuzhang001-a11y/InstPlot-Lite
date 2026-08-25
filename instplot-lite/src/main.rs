@@ -7,6 +7,7 @@ mod edit_history;
 mod fitting;
 mod fonts;
 mod image_export;
+mod native_theme;
 mod processing;
 
 use app::InstPlotLiteApp;

@@ -510,13 +510,6 @@ impl InstPlotLiteApp {
         let mut open = true;
         let mut requested: Option<(ProcessingOperation, String)> = None;
         let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-processing");
-        if !self.processing_native_theme_applied {
-            context.send_viewport_cmd_to(
-                viewport_id,
-                egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
-            );
-            self.processing_native_theme_applied = true;
-        }
         context.show_viewport_immediate(
             viewport_id,
             egui::ViewportBuilder::default()
@@ -525,6 +518,13 @@ impl InstPlotLiteApp {
                 .with_min_inner_size([520.0, 420.0])
                 .with_resizable(true),
             |ui, _class| {
+                if !self.processing_native_theme_applied {
+                    crate::native_theme::force_dark_title_bar("InstPlot Lite · 数据处理");
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::SetTheme(
+                        egui::SystemTheme::Dark,
+                    ));
+                    self.processing_native_theme_applied = true;
+                }
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
                     return;
@@ -868,13 +868,6 @@ impl InstPlotLiteApp {
         let mut execute = false;
         let mut clear = false;
         let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-fitting");
-        if !self.fit_native_theme_applied {
-            context.send_viewport_cmd_to(
-                viewport_id,
-                egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
-            );
-            self.fit_native_theme_applied = true;
-        }
         context.show_viewport_immediate(
             viewport_id,
             egui::ViewportBuilder::default()
@@ -883,6 +876,13 @@ impl InstPlotLiteApp {
                 .with_min_inner_size([560.0, 470.0])
                 .with_resizable(true),
             |ui, _class| {
+                if !self.fit_native_theme_applied {
+                    crate::native_theme::force_dark_title_bar("InstPlot Lite · 曲线拟合");
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::SetTheme(
+                        egui::SystemTheme::Dark,
+                    ));
+                    self.fit_native_theme_applied = true;
+                }
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
                     return;
@@ -1225,6 +1225,7 @@ impl InstPlotLiteApp {
 impl eframe::App for InstPlotLiteApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if !self.root_native_theme_applied {
+            crate::native_theme::force_dark_title_bar("InstPlot Lite");
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
             self.root_native_theme_applied = true;
