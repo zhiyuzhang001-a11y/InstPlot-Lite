@@ -3,6 +3,13 @@
 All packages contain the native Rust executable. End users do not need Python,
 Rust, Cargo, or a terminal.
 
+Every package also contains the project MIT license, `THIRD_PARTY_NOTICES`, and
+the complete SIL Open Font License texts for the bundled Liberation Sans and
+Noto Sans SC subsets. macOS keeps a copy both inside the app bundle and in a
+visible `Licenses` folder on the DMG; Windows installs them under
+`licenses`; Linux installs them under its standard documentation directory or
+the portable archive's `licenses` folder.
+
 ## macOS
 
 Run `packaging/macos/build-dmg.sh`. It creates an application bundle, applies an

@@ -33,6 +33,12 @@ saved settings, logs, or application caches. On Windows, uninstall it from
 Debian/Ubuntu, use the graphical package manager's **Remove** action; for the
 portable Linux archive, delete its extracted folder.
 
+Every native package includes the project MIT license, a consolidated
+third-party notice, and the complete SIL Open Font License texts for both
+bundled font subsets. The macOS DMG exposes these in its `Licenses` folder and
+keeps a copy inside the installed app; Windows and Linux install the same files
+alongside the application documentation.
+
 The preview packages are not yet signed with Apple and Microsoft developer
 certificates, so macOS Gatekeeper or Windows SmartScreen may display a warning
 on first launch. Checksums are published with the release notes.

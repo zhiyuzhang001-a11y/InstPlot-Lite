@@ -34,6 +34,10 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "{#ReleaseExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepositoryDir}\LICENSE"; DestDir: "{app}\licenses"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "{#ProjectDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#ProjectDir}\assets\OFL-Liberation.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#ProjectDir}\assets\OFL.txt"; DestDir: "{app}\licenses"; DestName: "OFL-Noto-Sans-SC.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\instplot-lite.exe"
