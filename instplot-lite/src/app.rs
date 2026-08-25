@@ -13,6 +13,7 @@ use crate::{
 
 const PLOT_LEFT_GUTTER: f32 = 36.0;
 const PLOT_BOTTOM_GUTTER: f32 = 12.0;
+const PLOT_EXPORT_TOP_GUTTER: f32 = 8.0;
 
 struct PendingDeletion {
     dataset_index: usize,
@@ -1484,7 +1485,7 @@ impl eframe::App for InstPlotLiteApp {
         });
         ui.add_space(PLOT_BOTTOM_GUTTER);
         self.last_export_rect = Some(Rect::from_min_max(
-            plot_row.response.rect.min,
+            plot_row.response.rect.min - egui::vec2(0.0, PLOT_EXPORT_TOP_GUTTER),
             plot_row.response.rect.max + egui::vec2(0.0, PLOT_BOTTOM_GUTTER),
         ));
         let response = plot_row.inner;
