@@ -502,8 +502,13 @@ impl InstPlotLiteApp {
         }
         let mut open = true;
         let mut requested: Option<(ProcessingOperation, String)> = None;
+        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-processing");
+        context.send_viewport_cmd_to(
+            viewport_id,
+            egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
+        );
         context.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("instplot-lite-processing"),
+            viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 数据处理")
                 .with_inner_size([570.0, 455.0])
@@ -851,8 +856,13 @@ impl InstPlotLiteApp {
         let mut open = true;
         let mut execute = false;
         let mut clear = false;
+        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-fitting");
+        context.send_viewport_cmd_to(
+            viewport_id,
+            egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark),
+        );
         context.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("instplot-lite-fitting"),
+            viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 曲线拟合")
                 .with_inner_size([620.0, 520.0])
