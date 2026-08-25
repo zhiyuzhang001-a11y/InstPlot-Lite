@@ -66,11 +66,12 @@ fn light_export_rgba([red, green, blue, alpha]: [u8; 4]) -> [u8; 4] {
     let minimum = red.min(green).min(blue);
 
     // Plot chrome (background, grid, axes, labels, and legend) is neutral gray.
-    // Invert only those pixels so colored data series keep their original color.
+    // Map bright text to black and darker chrome to white/light gray while
+    // leaving colored data series unchanged.
     if maximum - minimum <= 12 {
         let gray = ((u16::from(red) + u16::from(green) + u16::from(blue)) / 3) as u8;
-        let inverted = 255 - gray;
-        [inverted, inverted, inverted, alpha]
+        let export_gray = if gray >= 128 { 0 } else { 255 - gray / 2 };
+        [export_gray, export_gray, export_gray, alpha]
     } else {
         [red, green, blue, alpha]
     }
@@ -97,7 +98,8 @@ mod tests {
     fn light_export_inverts_neutral_plot_chrome() {
         assert_eq!(light_export_rgba([0, 0, 0, 255]), [255, 255, 255, 255]);
         assert_eq!(light_export_rgba([255, 255, 255, 255]), [0, 0, 0, 255]);
-        assert_eq!(light_export_rgba([64, 64, 64, 128]), [191, 191, 191, 128]);
+        assert_eq!(light_export_rgba([64, 64, 64, 128]), [223, 223, 223, 128]);
+        assert_eq!(light_export_rgba([180, 180, 180, 255]), [0, 0, 0, 255]);
     }
 
     #[test]

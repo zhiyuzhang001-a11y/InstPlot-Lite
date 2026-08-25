@@ -69,7 +69,7 @@ on first launch. Checksums are published with the release notes.
   degree/radian conversion. It reports the equation, R², and retained point
   count, then draws the fitted curve directly on the main plot. The fitting
   implementation is native Rust and does not require Python or SciPy.
-- Click **导出图片** to save the complete plot as a white-background PNG, including tick values,
+- Click **导出图片** to save the complete plot as a white-background PNG with black tick labels, including tick values,
   X/Y axis labels, and the legend, but excluding application controls.
 - Open **导出数据…** to export the current dataset as CSV, XLSX, TSV, or
   tab-delimited TXT. All datasets can be exported either to one XLSX workbook
