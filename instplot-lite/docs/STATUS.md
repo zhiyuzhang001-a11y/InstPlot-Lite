@@ -77,7 +77,7 @@ a terminal.
 
 ## L1 measurements: macOS arm64
 
-- Current release executable: 5,769,920 bytes (5.50 MiB).
+- Optimized v0.2 release executable: 6,813,392 bytes (6.50 MiB).
 - Current empty-window sampled RSS: 108,256 KiB (105.72 MiB).
 - Renderer baseline with a minimal font: 99,888 KiB (97.55 MiB).
 - Full macOS STHeiti font experiment: 208,496 KiB (203.61 MiB), rejected.
@@ -135,20 +135,19 @@ install, bundled importer execution, and uninstall; the Linux DEB completed the
 same installation lifecycle; both DMGs passed structure, checksum, bundled
 import, and disk-image verification.
 
-The v0.2.0 unsigned preview is being prepared from the completed local source.
-The previous five artifacts remain available in the
-[v0.1.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.1.0).
-The release is intentionally marked as a prerelease because macOS Developer ID
+The verified artifacts are published in the
+[v0.2.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.2.0),
+together with a five-entry SHA-256 checksum manifest. The release is
+intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
-developer certificates. Mouse interaction still benefits from a final
-hands-on user-session check, while the import-to-PNG path is automated.
+developer certificates. Mouse interaction still benefits from a final hands-on
+user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The functional scope for v0.2 is complete. The immediate next action is to run
-the native CI packaging matrix and publish its verified artifacts. Remaining
-stable-release promotion work requires release-owner credentials or hands-on
-devices:
+The functional scope and unsigned v0.2.0 preview release are complete.
+Remaining stable-release promotion work requires release-owner credentials or
+hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
 2. Configure Windows Authenticode signing.
