@@ -1,4 +1,0 @@
-# Install the locked runtime dependencies first, then install this local project with --no-deps.
-# Regenerate the universal Python 3.10-3.14 lock from the minimum supported version:
-# uv pip compile pyproject.toml --python-version 3.10 --universal --generate-hashes --output-file requirements.lock
--r requirements.lock

@@ -134,10 +134,10 @@ InstPlot Lite 不创建用户数据库、设置文件、日志或应用缓存，
 ## 项目资料
 
 - [文档导航](docs/README.md)
-- [Lite 版开发说明](instplot-lite/README.md)
-- [当前 Lite 状态](instplot-lite/docs/STATUS.md)
-- [安装包构建说明](instplot-lite/packaging/README.md)
-- [许可证与第三方声明](instplot-lite/THIRD_PARTY_NOTICES.md)
-- [旧 Python 版说明](docs/LEGACY_PYTHON_EDITION.md)
+- [开发与源码构建说明](docs/DEVELOPMENT.md)
+- [当前实现状态](docs/STATUS.md)
+- [安装包构建说明](packaging/README.md)
+- [许可证与第三方声明](THIRD_PARTY_NOTICES.md)
+- [旧 Python 版源码与历史](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
 
 本项目使用 [MIT License](LICENSE)。安装包同时包含内置字体所需的完整 SIL Open Font License 文本。

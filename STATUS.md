@@ -4,7 +4,7 @@
 - 当前产品：`InstPlot Lite`
 - 当前公开版本：`v0.2.0 未签名预览版`
 - 当前主线：Rust 原生桌面应用，Windows / macOS / Linux 安装包
-- 旧 Python 版：保留为参考实现和历史工程记录，不再作为普通用户推荐入口
+- 旧 Python 版：已迁移到独立源码归档仓库，不再打包或作为普通用户安装入口
 
 ## 总目标
 
@@ -42,9 +42,9 @@
 
 - 普通用户：[README.md](README.md)
 - 文档导航：[docs/README.md](docs/README.md)
-- Lite 详细状态：[instplot-lite/docs/STATUS.md](instplot-lite/docs/STATUS.md)
-- 旧 Python 版：[docs/LEGACY_PYTHON_EDITION.md](docs/LEGACY_PYTHON_EDITION.md)
+- Lite 详细状态：[docs/STATUS.md](docs/STATUS.md)
+- 旧 Python 版：[InstPlot Python Legacy](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
 
 ## 下一步
 
-完成 GitHub 用户文档重组后，准备并发布包含当前主分支改进的新未签名预览版。
+仓库拆分完成后，准备并发布包含当前主分支改进的新未签名预览版。
