@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > 普通用户请阅读仓库首页的[中文下载与使用说明](../README.md)，并从
-> [Releases](https://github.com/zhiyuzhang001-a11y/InstPlot/releases) 下载安装包。
+> [Releases](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases) 下载安装包。
 > 本页用于源码构建、自动验证和实现细节。
 
 InstPlot Lite is a small native Rust edition of InstPlot. It focuses on importing
@@ -11,7 +11,7 @@ undo/redo, lightweight numerical processing, and exporting cleaned data.
 
 InstPlot Lite is the current end-user product. The historical Python source,
 algorithms, plans, and tests now live in the separate
-[InstPlot Python Legacy](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
+[InstPlot Python 原版](https://github.com/zhiyuzhang001-a11y/InstPlot)
 repository.
 
 ## Development
@@ -24,7 +24,7 @@ cargo build --release
 
 ## Download
 
-The [v0.2.0 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.2.0)
+The [v0.2.0 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.2.0)
 provides native installers for Windows x64, Apple Silicon and Intel Macs, and
 Linux x64. End users do not need Rust, Cargo, Python, or a terminal.
 

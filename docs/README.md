@@ -6,8 +6,8 @@
 ## 普通用户
 
 - [项目首页、下载与使用说明](../README.md)
-- [GitHub Releases](https://github.com/zhiyuzhang001-a11y/InstPlot/releases)
-- [问题反馈](https://github.com/zhiyuzhang001-a11y/InstPlot/issues)
+- [GitHub Releases](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases)
+- [问题反馈](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/issues)
 
 ## 开发与维护
 
@@ -22,6 +22,6 @@
 
 原 Python 源码、算法、测试、M1–M7 计划和历史报告已经迁移到独立仓库：
 
-- [InstPlot Python Legacy](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
+- [InstPlot Python 原版](https://github.com/zhiyuzhang001-a11y/InstPlot)
 
 该仓库用于源码和算法参考，不再提供预编译安装包。
