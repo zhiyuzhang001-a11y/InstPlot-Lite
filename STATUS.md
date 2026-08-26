@@ -43,7 +43,7 @@
 - 普通用户：[README.md](README.md)
 - 文档导航：[docs/README.md](docs/README.md)
 - Lite 详细状态：[docs/STATUS.md](docs/STATUS.md)
-- 旧 Python 版：[InstPlot Python Legacy](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
+- Python 原版：[InstPlot](https://github.com/zhiyuzhang001-a11y/InstPlot)
 
 ## 下一步
 

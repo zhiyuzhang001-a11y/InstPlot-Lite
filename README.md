@@ -8,11 +8,11 @@
 
 无需 Python · 无需 Microsoft Excel · 无需终端命令
 
-[![InstPlot Lite CI](https://github.com/zhiyuzhang001-a11y/InstPlot/actions/workflows/instplot-lite.yml/badge.svg)](https://github.com/zhiyuzhang001-a11y/InstPlot/actions/workflows/instplot-lite.yml)
+[![InstPlot Lite CI](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/actions/workflows/instplot-lite.yml/badge.svg)](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/actions/workflows/instplot-lite.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-555555.svg)](LICENSE)
-[![Platforms](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-native-555555.svg)](https://github.com/zhiyuzhang001-a11y/InstPlot/releases)
+[![Platforms](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-native-555555.svg)](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases)
 
-## [前往下载页面](https://github.com/zhiyuzhang001-a11y/InstPlot/releases)
+## [前往下载页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases)
 
 </div>
 
@@ -32,7 +32,7 @@ InstPlot Lite 面向需要快速查看实验数据的学生和科研人员。它
 
 ## 下载与安装
 
-当前公开版本是 **v0.2.0 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.2.0)向下找到 **Assets**，根据电脑选择文件。
+当前公开版本是 **v0.2.0 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.2.0)向下找到 **Assets**，根据电脑选择文件。
 
 > [!NOTE]
 > 本页功能说明和截图对应当前开发主线。白底 PNG、滚轮缩放和跨系统界面一致性等近期改进
@@ -122,7 +122,7 @@ InstPlot Lite 不创建用户数据库、设置文件、日志或应用缓存，
 
 ## 遇到问题
 
-请在 [GitHub Issues](https://github.com/zhiyuzhang001-a11y/InstPlot/issues) 中说明：
+请在 [GitHub Issues](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/issues) 中说明：
 
 - 使用的系统版本；
 - 下载的安装包文件名；
@@ -138,6 +138,6 @@ InstPlot Lite 不创建用户数据库、设置文件、日志或应用缓存，
 - [当前实现状态](docs/STATUS.md)
 - [安装包构建说明](packaging/README.md)
 - [许可证与第三方声明](THIRD_PARTY_NOTICES.md)
-- [旧 Python 版源码与历史](https://github.com/zhiyuzhang001-a11y/InstPlot-Python-Legacy)
+- [旧 Python 版源码与历史](https://github.com/zhiyuzhang001-a11y/InstPlot)
 
 本项目使用 [MIT License](LICENSE)。安装包同时包含内置字体所需的完整 SIL Open Font License 文本。

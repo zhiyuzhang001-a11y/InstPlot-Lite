@@ -149,7 +149,7 @@ same installation lifecycle; both DMGs passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the
-[v0.2.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot/releases/tag/v0.2.0),
+[v0.2.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.2.0),
 together with a five-entry SHA-256 checksum manifest. The release is
 intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
