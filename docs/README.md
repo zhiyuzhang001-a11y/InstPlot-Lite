@@ -22,6 +22,7 @@
 以下资料记录了原版 InstPlot 的数据 I/O、撤销历史、性能、依赖和脚本安装阶段。它们不代表当前 Lite 版的用户安装方式。
 
 - [旧 Python 版说明](LEGACY_PYTHON_EDITION.md)
+- [旧 Python 版安装与维护说明](LEGACY_PYTHON_INSTALL.md)
 - [历史实施计划](IMPLEMENTATION_PLAN.md)
 - [历史项目路线图](PROJECT_ROADMAP.md)
 - [M2 数据 I/O 合同](M2_DATA_IO_CONTRACT.md)

@@ -24,3 +24,6 @@ InstPlot 最初使用 Python、PySide6、Matplotlib、NumPy、Pandas 和 SciPy �
 - 历史验证报告：`reports/`
 
 这些入口不再是普通用户的推荐安装方式。开发者如需运行旧版，应先阅读历史计划、锁文件和测试要求，避免把 Python 版安装说明误用于 Lite 原生安装包。
+
+完整的历史环境要求、安装入口、修复方法和锁文件维护命令见
+[旧 Python 版安装与维护说明](LEGACY_PYTHON_INSTALL.md)。
