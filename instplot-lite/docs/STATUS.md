@@ -1,6 +1,13 @@
 # InstPlot Lite status
 
-Updated: 2026-08-25
+Updated: 2026-08-26
+
+> [!NOTE]
+> InstPlot Lite is now the current user-facing product. The public v0.2.0
+> unsigned preview contains the core workflow; the current development branch
+> additionally includes consistent dark application content, mouse-wheel zoom,
+> bundled license files, and white PNG export with black ticks. These changes
+> are intended for the next preview package.
 
 ## Overall objective
 
@@ -76,7 +83,7 @@ a terminal.
   Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
   CI verifies the installed Windows and Linux license files; the macOS DMG keeps
   them both in a visible folder and inside the installed app bundle.
-- Forty-four local tests pass with no compiler warnings, including real XLS and
+- Forty-eight local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
 

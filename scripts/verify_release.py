@@ -26,12 +26,14 @@ LOCK_COMMAND = (
 
 def validate_release_docs(root=ROOT):
     root = Path(root)
-    readme = (root / "README.md").read_text(encoding="utf-8")
+    legacy_guide = (root / "docs" / "LEGACY_PYTHON_INSTALL.md").read_text(
+        encoding="utf-8"
+    )
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
     errors = []
     required = {
-        f"version-{version}-blue": "README version badge does not match pyproject.toml",
+        f"version-{version}-blue": "legacy guide version badge does not match pyproject.toml",
         "Windows%20%7C%20macOS%20%7C%20Linux": "platform badge must include all three systems",
         "CPython 3.10–3.14": "supported CPython range is missing",
         "无需预装 Python": "zero-Python bootstrap guidance is missing",
@@ -46,11 +48,11 @@ def validate_release_docs(root=ROOT):
         LOCK_COMMAND: "canonical lock regeneration command is missing",
     }
     for marker, reason in required.items():
-        if marker not in readme:
+        if marker not in legacy_guide:
             errors.append(reason)
     for placeholder in ("your-email", "yourusername", "example.com"):
-        if placeholder in readme.lower():
-            errors.append(f"README contains placeholder: {placeholder}")
+        if placeholder in legacy_guide.lower():
+            errors.append(f"legacy guide contains placeholder: {placeholder}")
     expected_issues = "https://github.com/zhiyuzhang001-a11y/InstPlot/issues"
     if metadata["project"].get("urls", {}).get("Issues") != expected_issues:
         errors.append("pyproject.toml issue tracker metadata is missing or incorrect")
