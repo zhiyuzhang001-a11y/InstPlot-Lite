@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 下载与使用说明
+    url: https://github.com/zhiyuzhang001-a11y/InstPlot#下载与安装
+    about: 提交问题前，请先确认下载了适合当前系统的安装包。

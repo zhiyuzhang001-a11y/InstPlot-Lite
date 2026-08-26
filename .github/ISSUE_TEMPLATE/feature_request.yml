@@ -1,0 +1,23 @@
+name: 功能建议
+description: 建议一个能让 InstPlot Lite 更易用的功能或改进
+title: "[建议] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 请说明你正在处理什么数据、遇到了什么不方便。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎样改进？
+    validations:
+      required: true
+  - type: textarea
+    id: alternative
+    attributes:
+      label: 目前使用的替代办法（可选）
