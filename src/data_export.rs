@@ -39,14 +39,19 @@ pub fn suggested_file_stem(dataset: &DataSet) -> String {
     dataset_export_base(dataset)
 }
 
-pub fn save_retained_rows(path: &Path, dataset: &DataSet) -> Result<usize, String> {
+pub fn save_retained_rows_selected(
+    path: &Path,
+    dataset: &DataSet,
+    columns: &[usize],
+) -> Result<usize, String> {
+    validate_column_selection(dataset, columns)?;
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if extension == "xlsx" {
-        return save_workbook(path, std::slice::from_ref(dataset)).map(|summary| summary.row_count);
+        return save_workbook_selected(path, dataset, columns).map(|summary| summary.row_count);
     }
     let format = match extension.as_str() {
         "csv" => TextExportFormat::Csv,
@@ -54,9 +59,18 @@ pub fn save_retained_rows(path: &Path, dataset: &DataSet) -> Result<usize, Strin
         "txt" => TextExportFormat::Txt,
         _ => return Err(format!("不支持的数据导出格式：.{extension}")),
     };
-    let bytes = encode_retained_rows(dataset, format.delimiter())?;
+    let bytes = encode_retained_rows_selected(dataset, columns, format.delimiter())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())?;
     Ok(retained_row_count(dataset))
+}
+
+pub fn save_workbook_selected(
+    path: &Path,
+    dataset: &DataSet,
+    columns: &[usize],
+) -> Result<ExportSummary, String> {
+    validate_column_selection(dataset, columns)?;
+    save_workbook_with_columns(path, std::slice::from_ref(dataset), Some(columns))
 }
 
 pub fn save_all_text(
@@ -83,6 +97,14 @@ pub fn save_all_text(
 }
 
 pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary, String> {
+    save_workbook_with_columns(path, datasets, None)
+}
+
+fn save_workbook_with_columns(
+    path: &Path,
+    datasets: &[DataSet],
+    selected_columns: Option<&[usize]>,
+) -> Result<ExportSummary, String> {
     if datasets.is_empty() {
         return Err("没有可导出的数据集".to_owned());
     }
@@ -91,14 +113,19 @@ pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary,
     let mut total_rows = 0_usize;
 
     for dataset in datasets {
+        let columns: Vec<usize> = selected_columns
+            .map(|columns| columns.to_vec())
+            .unwrap_or_else(|| (0..dataset.columns.len()).collect());
+        validate_column_selection(dataset, &columns)?;
         let sheet_name = unique_sheet_name(&dataset_export_base(dataset), &mut used_sheet_names);
         let worksheet = workbook.add_worksheet();
         worksheet
             .set_name(&sheet_name)
             .map_err(|error| error.to_string())?;
-        for (column_index, column) in dataset.columns.iter().enumerate() {
+        for (output_index, source_index) in columns.iter().copied().enumerate() {
+            let column = &dataset.columns[source_index];
             let column_index =
-                u16::try_from(column_index).map_err(|_| "列数超过 XLSX 支持范围".to_owned())?;
+                u16::try_from(output_index).map_err(|_| "列数超过 XLSX 支持范围".to_owned())?;
             worksheet
                 .write_string(0, column_index, &column.name)
                 .map_err(|error| error.to_string())?;
@@ -109,10 +136,11 @@ pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary,
             if !dataset.alive.get(row_index).copied().unwrap_or(false) {
                 continue;
             }
-            for (column_index, column) in dataset.columns.iter().enumerate() {
+            for (output_index, source_index) in columns.iter().copied().enumerate() {
+                let column = &dataset.columns[source_index];
                 let value = column.values.get(row_index).copied().unwrap_or(f64::NAN);
                 if value.is_finite() {
-                    let column_index = u16::try_from(column_index)
+                    let column_index = u16::try_from(output_index)
                         .map_err(|_| "列数超过 XLSX 支持范围".to_owned())?;
                     worksheet
                         .write_number(output_row, column_index, value)
@@ -134,20 +162,35 @@ pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary,
 }
 
 fn encode_retained_rows(dataset: &DataSet, delimiter: u8) -> Result<Vec<u8>, String> {
+    let columns: Vec<usize> = (0..dataset.columns.len()).collect();
+    encode_retained_rows_selected(dataset, &columns, delimiter)
+}
+
+fn encode_retained_rows_selected(
+    dataset: &DataSet,
+    columns: &[usize],
+    delimiter: u8,
+) -> Result<Vec<u8>, String> {
+    validate_column_selection(dataset, columns)?;
     let mut writer = csv::WriterBuilder::new()
         .delimiter(delimiter)
         .from_writer(Vec::new());
     writer
-        .write_record(dataset.columns.iter().map(|column| column.name.as_str()))
+        .write_record(
+            columns
+                .iter()
+                .map(|index| dataset.columns[*index].name.as_str()),
+        )
         .map_err(|error| error.to_string())?;
 
-    let mut fields = Vec::with_capacity(dataset.columns.len());
+    let mut fields = Vec::with_capacity(columns.len());
     for row_index in 0..dataset.row_count {
         if !dataset.alive.get(row_index).copied().unwrap_or(false) {
             continue;
         }
         fields.clear();
-        for column in &dataset.columns {
+        for column_index in columns {
+            let column = &dataset.columns[*column_index];
             let value = column.values.get(row_index).copied().unwrap_or(f64::NAN);
             fields.push(if value.is_finite() {
                 value.to_string()
@@ -160,6 +203,22 @@ fn encode_retained_rows(dataset: &DataSet, delimiter: u8) -> Result<Vec<u8>, Str
             .map_err(|error| error.to_string())?;
     }
     writer.into_inner().map_err(|error| error.to_string())
+}
+
+fn validate_column_selection(dataset: &DataSet, columns: &[usize]) -> Result<(), String> {
+    if columns.is_empty() {
+        return Err("请至少选择一列导出".to_owned());
+    }
+    let mut seen = HashSet::new();
+    for &column in columns {
+        if column >= dataset.columns.len() {
+            return Err("所选列不存在".to_owned());
+        }
+        if !seen.insert(column) {
+            return Err("所选列重复".to_owned());
+        }
+    }
+    Ok(())
 }
 
 fn retained_row_count(dataset: &DataSet) -> usize {
@@ -266,7 +325,10 @@ fn unique_sheet_name(value: &str, used: &mut HashSet<String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TextExportFormat, encode_retained_rows, save_all_text, save_workbook};
+    use super::{
+        TextExportFormat, encode_retained_rows, encode_retained_rows_selected, save_all_text,
+        save_workbook,
+    };
     use crate::data::{DataSet, NumericColumn, read_data_file};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -309,6 +371,13 @@ mod tests {
         let bytes = encode_retained_rows(&dataset("sample.csv"), b',').unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert_eq!(text, "\"磁场,Oe\",信号\n1,4\n3,\n");
+    }
+
+    #[test]
+    fn selected_column_export_keeps_requested_order_and_retained_rows() {
+        let bytes = encode_retained_rows_selected(&dataset("sample.csv"), &[1], b',').unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert_eq!(text, "信号\n4\n\"\"\n");
     }
 
     #[test]

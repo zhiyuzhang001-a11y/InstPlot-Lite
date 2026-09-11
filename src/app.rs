@@ -23,6 +23,9 @@ struct PendingDeletion {
 }
 
 struct ProcessingSettings {
+    scope: ProcessingScope,
+    selected_datasets: Vec<bool>,
+    result_mode: ProcessingResultMode,
     fit_min: f64,
     fit_max: f64,
     background_order: usize,
@@ -36,6 +39,27 @@ struct ProcessingSettings {
     denoise_in_range: bool,
     denoise_min: f64,
     denoise_max: f64,
+    formula: String,
+    formula_a: String,
+    formula_b: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessingScope {
+    Current,
+    Selected,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessingResultMode {
+    Overwrite,
+    Retain,
+}
+
+struct ExportSelection {
+    extension: String,
+    columns: Vec<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +140,9 @@ struct FitOverlay {
 impl Default for ProcessingSettings {
     fn default() -> Self {
         Self {
+            scope: ProcessingScope::Current,
+            selected_datasets: Vec::new(),
+            result_mode: ProcessingResultMode::Overwrite,
             fit_min: 0.0,
             fit_max: 1.0,
             background_order: 2,
@@ -129,6 +156,9 @@ impl Default for ProcessingSettings {
             denoise_in_range: false,
             denoise_min: 0.0,
             denoise_max: 1.0,
+            formula: "a * y + b".to_owned(),
+            formula_a: "1".to_owned(),
+            formula_b: "0".to_owned(),
         }
     }
 }
@@ -152,6 +182,7 @@ pub struct InstPlotLiteApp {
     selection_current: Option<egui::Pos2>,
     processing_open: bool,
     processing_settings: ProcessingSettings,
+    export_selection: Option<ExportSelection>,
     fit_open: bool,
     fit_settings: FitSettings,
     fit_overlay: Option<FitOverlay>,
@@ -186,6 +217,7 @@ impl InstPlotLiteApp {
             selection_current: None,
             processing_open: false,
             processing_settings: ProcessingSettings::default(),
+            export_selection: None,
             fit_open: false,
             fit_settings: FitSettings::default(),
             fit_overlay: None,
@@ -260,7 +292,18 @@ impl InstPlotLiteApp {
         };
     }
 
-    fn export_active_data(&mut self, extension: &str) {
+    fn open_export_columns(&mut self, extension: &str) {
+        let Some(dataset) = self.datasets.get(self.active_dataset) else {
+            self.status = "请先导入数据".to_owned();
+            return;
+        };
+        self.export_selection = Some(ExportSelection {
+            extension: extension.to_owned(),
+            columns: vec![true; dataset.columns.len()],
+        });
+    }
+
+    fn export_active_data(&mut self, extension: &str, columns: &[usize]) {
         let Some(dataset) = self.datasets.get(self.active_dataset) else {
             self.status = "请先导入数据".to_owned();
             return;
@@ -279,9 +322,99 @@ impl InstPlotLiteApp {
         else {
             return;
         };
-        match data_export::save_retained_rows(&path, dataset) {
-            Ok(row_count) => self.status = format!("已导出 {row_count} 行数据：{}", path.display()),
+        match data_export::save_retained_rows_selected(&path, dataset, columns) {
+            Ok(row_count) => {
+                self.status = format!(
+                    "已导出 {row_count} 行、{} 列数据：{}",
+                    columns.len(),
+                    path.display()
+                )
+            }
             Err(error) => self.status = format!("数据导出失败：{error}"),
+        }
+    }
+
+    fn show_export_columns_window(&mut self, context: &egui::Context) {
+        let Some(_) = self.export_selection.as_ref() else {
+            return;
+        };
+        let column_names: Vec<String> = self
+            .datasets
+            .get(self.active_dataset)
+            .map(|dataset| {
+                dataset
+                    .columns
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut open = true;
+        let mut export = false;
+        egui::Window::new("选择导出列")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(360.0)
+            .show(context, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(10.0);
+                        ui.indent("export-content", |ui| {
+                            ui.spacing_mut().item_spacing.y = 9.0;
+                            let Some(settings) = self.export_selection.as_mut() else {
+                                return;
+                            };
+                            ui.label("选择当前数据集要写入文件的列。");
+                            ui.horizontal(|ui| {
+                                if ui.button("全选").clicked() {
+                                    settings.columns.fill(true);
+                                }
+                                if ui.button("全不选").clicked() {
+                                    settings.columns.fill(false);
+                                }
+                            });
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .max_height(260.0)
+                                .show(ui, |ui| {
+                                    for (index, name) in column_names.iter().enumerate() {
+                                        if let Some(selected) = settings.columns.get_mut(index) {
+                                            ui.checkbox(selected, format!("{}：{name}", index + 1));
+                                        }
+                                    }
+                                });
+                            ui.separator();
+                            let selected_count = settings
+                                .columns
+                                .iter()
+                                .filter(|selected| **selected)
+                                .count();
+                            ui.horizontal(|ui| {
+                                ui.label(format!("已选 {selected_count} 列"));
+                                if ui
+                                    .add_enabled(selected_count > 0, egui::Button::new("导出"))
+                                    .clicked()
+                                {
+                                    export = true;
+                                }
+                            });
+                        });
+                        ui.add_space(10.0);
+                    });
+            });
+        if export {
+            let settings = self.export_selection.take().expect("export settings exist");
+            let columns = settings
+                .columns
+                .iter()
+                .enumerate()
+                .filter_map(|(index, selected)| selected.then_some(index))
+                .collect::<Vec<_>>();
+            self.export_active_data(&settings.extension, &columns);
+        } else if !open {
+            self.export_selection = None;
         }
     }
 
@@ -437,6 +570,10 @@ impl InstPlotLiteApp {
     }
 
     fn open_processing_window(&mut self) {
+        self.processing_settings.scope = ProcessingScope::Current;
+        self.processing_settings.selected_datasets = (0..self.datasets.len())
+            .map(|index| index == self.active_dataset)
+            .collect();
         let range = self
             .datasets
             .get(self.active_dataset)
@@ -454,47 +591,180 @@ impl InstPlotLiteApp {
     }
 
     fn apply_processing(&mut self, operation: ProcessingOperation, suffix: &str) {
-        let dataset_index = self.active_dataset;
-        let source_column = self.y_column;
-        let Some(dataset) = self.datasets.get(dataset_index) else {
+        let formula_targets_x = match &operation {
+            ProcessingOperation::Formula { expression, .. } => {
+                match fitting::formula_output_axis(expression) {
+                    Ok(fitting::FormulaAxis::X) => true,
+                    Ok(fitting::FormulaAxis::Y) => false,
+                    Err(error) => {
+                        self.status = format!("公式无效：{error}");
+                        return;
+                    }
+                }
+            }
+            _ => false,
+        };
+        let Some(active) = self.datasets.get(self.active_dataset) else {
             self.status = "请先导入数据".to_owned();
             return;
         };
-        let Some(source_name) = dataset
+        let Some(x_name) = active
             .columns
-            .get(source_column)
+            .get(self.x_column)
+            .map(|column| column.name.clone())
+        else {
+            self.status = "当前 X 列不存在".to_owned();
+            return;
+        };
+        let Some(y_name) = active
+            .columns
+            .get(self.y_column)
             .map(|column| column.name.clone())
         else {
             self.status = "当前 Y 列不存在".to_owned();
             return;
         };
-        let result = match processing::apply_to_dataset(dataset, source_column, &operation) {
-            Ok(result) => result,
-            Err(error) => {
-                self.status = format!("处理失败：{error}");
-                return;
-            }
+        let selected: Vec<usize> = match self.processing_settings.scope {
+            ProcessingScope::Current => vec![self.active_dataset],
+            ProcessingScope::Selected => self
+                .processing_settings
+                .selected_datasets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, selected)| selected.then_some(index))
+                .collect(),
+            ProcessingScope::All => (0..self.datasets.len()).collect(),
         };
-        let summary = processing_summary(&result.metadata);
-        let dataset = &mut self.datasets[dataset_index];
-        let column_name = unique_column_name(dataset, &format!("{source_name} [{suffix}]"));
-        let column_index = dataset.columns.len();
-        dataset.columns.push(data::NumericColumn {
-            name: column_name.clone(),
-            values: result.values,
-        });
-        self.history.record_add_column(
-            dataset_index,
-            column_index,
-            column_name.clone(),
-            source_column,
-            operation,
-        );
+        if selected.is_empty() {
+            self.status = "请至少选择一条曲线".to_owned();
+            return;
+        }
+        let mut pending = Vec::with_capacity(selected.len());
+        for dataset_index in selected {
+            let Some(dataset) = self.datasets.get(dataset_index) else {
+                continue;
+            };
+            let find_column = |name: &str, active_index: usize| {
+                if dataset_index == self.active_dataset {
+                    return Some(active_index);
+                }
+                let matches: Vec<usize> = dataset
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, column)| (column.name == name).then_some(index))
+                    .collect();
+                if matches.len() == 1 {
+                    Some(matches[0])
+                } else {
+                    None
+                }
+            };
+            let Some(x_column) = find_column(&x_name, self.x_column) else {
+                self.status = format!(
+                    "处理未执行：{} 的 X 列“{x_name}”缺失或重名",
+                    dataset.display_name()
+                );
+                return;
+            };
+            let Some(y_column) = find_column(&y_name, self.y_column) else {
+                self.status = format!(
+                    "处理未执行：{} 的 Y 列“{y_name}”缺失或重名",
+                    dataset.display_name()
+                );
+                return;
+            };
+            let dataset_operation = processing_operation_with_x(&operation, x_column);
+            let source_column = if formula_targets_x {
+                x_column
+            } else {
+                y_column
+            };
+            let source_name = &dataset.columns[source_column].name;
+            let result = match processing::apply_to_dataset(dataset, y_column, &dataset_operation) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.status = format!("处理未执行：{}：{error}", dataset.display_name());
+                    return;
+                }
+            };
+            let column_name = unique_column_name(dataset, &format!("{source_name} [{suffix}]"));
+            pending.push((
+                dataset_index,
+                y_column,
+                source_column,
+                dataset_operation,
+                column_name,
+                result,
+            ));
+        }
+        let summary = pending
+            .first()
+            .map(|(_, _, _, _, _, result)| processing_summary(&result.metadata))
+            .unwrap_or_default();
+        let mut added_columns = Vec::with_capacity(pending.len());
+        let mut replaced_columns = Vec::with_capacity(pending.len());
+        let mut active_result_column = None;
+        for (dataset_index, y_column, source_column, dataset_operation, column_name, result) in
+            pending
+        {
+            let dataset = &mut self.datasets[dataset_index];
+            let column_index = if self.processing_settings.result_mode
+                == ProcessingResultMode::Overwrite
+            {
+                let previous_values =
+                    std::mem::replace(&mut dataset.columns[source_column].values, result.values);
+                replaced_columns.push((
+                    dataset_index,
+                    source_column,
+                    previous_values,
+                    y_column,
+                    dataset_operation,
+                ));
+                source_column
+            } else {
+                let column_index = dataset.columns.len();
+                dataset.columns.push(data::NumericColumn {
+                    name: column_name,
+                    values: result.values,
+                });
+                added_columns.push((
+                    dataset_index,
+                    column_index,
+                    dataset.columns[column_index].name.clone(),
+                    y_column,
+                    dataset_operation,
+                ));
+                column_index
+            };
+            if dataset_index == self.active_dataset {
+                active_result_column = Some(column_index);
+            }
+        }
+        let processed_count = added_columns.len() + replaced_columns.len();
+        if self.processing_settings.result_mode == ProcessingResultMode::Overwrite {
+            self.history.record_replace_columns(replaced_columns);
+        } else {
+            self.history.record_add_columns(added_columns);
+        }
         self.fit_overlay = None;
-        self.y_column = column_index;
+        if let Some(column_index) = active_result_column {
+            if formula_targets_x {
+                self.x_column = column_index;
+            } else {
+                self.y_column = column_index;
+            }
+        }
         self.reset_view = true;
         self.visible_x_range = None;
-        self.status = format!("已生成派生列“{column_name}”；{summary}；原始列未修改");
+        let axis = if formula_targets_x { "X" } else { "Y" };
+        let result_text = if self.processing_settings.result_mode == ProcessingResultMode::Overwrite
+        {
+            "已覆盖原列（可撤销）"
+        } else {
+            "已保留为派生列"
+        };
+        self.status = format!("已处理 {processed_count} 条曲线，{axis}：{result_text}；{summary}");
     }
 
     fn show_processing_window(&mut self, context: &egui::Context) {
@@ -508,24 +778,106 @@ impl InstPlotLiteApp {
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 数据处理")
-                .with_inner_size([570.0, 455.0])
-                .with_min_inner_size([520.0, 420.0])
+                .with_inner_size([570.0, 570.0])
+                .with_min_inner_size([520.0, 500.0])
                 .with_resizable(true),
             |ui, _class| {
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
                     return;
                 }
-                let content_rect = ui
-                    .available_rect_before_wrap()
-                    .shrink2(egui::vec2(18.0, 14.0));
-                let mut content_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(content_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                let ui = &mut content_ui;
-                ui.label("处理当前数据集的 Y 列，并生成新列；原始数据不会被覆盖。");
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                ui.add_space(12.0);
+                ui.indent("processing-content", |ui| {
+                ui.spacing_mut().item_spacing.y = 10.0;
+                let dataset_names: Vec<String> = self
+                    .datasets
+                    .iter()
+                    .map(data::DataSet::display_name)
+                    .collect();
+                ui.horizontal(|ui| {
+                    ui.label("结果写入：");
+                    ui.selectable_value(
+                        &mut self.processing_settings.result_mode,
+                        ProcessingResultMode::Overwrite,
+                        "覆盖原列",
+                    );
+                    ui.selectable_value(
+                        &mut self.processing_settings.result_mode,
+                        ProcessingResultMode::Retain,
+                        "保留派生列",
+                    );
+                });
+                ui.small("此设置适用于本窗口全部操作和所有选中曲线；覆盖操作仍可撤销。");
+                ui.horizontal(|ui| {
+                    ui.label("处理范围：");
+                    ui.selectable_value(
+                        &mut self.processing_settings.scope,
+                        ProcessingScope::Current,
+                        "当前曲线",
+                    );
+                    ui.selectable_value(
+                        &mut self.processing_settings.scope,
+                        ProcessingScope::Selected,
+                        "选择曲线",
+                    );
+                    ui.selectable_value(
+                        &mut self.processing_settings.scope,
+                        ProcessingScope::All,
+                        "全部曲线",
+                    );
+                });
+                if self.processing_settings.selected_datasets.len() != dataset_names.len() {
+                    self.processing_settings.selected_datasets = (0..dataset_names.len())
+                        .map(|index| index == self.active_dataset)
+                        .collect();
+                }
+                if self.processing_settings.scope == ProcessingScope::Current {
+                    let previous_dataset = self.active_dataset;
+                    ui.horizontal(|ui| {
+                        ui.label("当前曲线：");
+                        egui::ComboBox::from_id_salt("processing-dataset")
+                            .width(300.0)
+                            .selected_text(
+                                dataset_names
+                                    .get(self.active_dataset)
+                                    .map(String::as_str)
+                                    .unwrap_or("未选择"),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (index, name) in dataset_names.iter().enumerate() {
+                                    ui.selectable_value(&mut self.active_dataset, index, name);
+                                }
+                            });
+                    });
+                    if self.active_dataset != previous_dataset {
+                        self.clamp_columns();
+                        self.reset_after_coordinate_change();
+                        self.fit_overlay = None;
+                    }
+                } else if self.processing_settings.scope == ProcessingScope::Selected {
+                    ui.horizontal(|ui| {
+                        if ui.button("全选").clicked() {
+                            self.processing_settings.selected_datasets.fill(true);
+                        }
+                        if ui.button("全不选").clicked() {
+                            self.processing_settings.selected_datasets.fill(false);
+                        }
+                    });
+                    egui::ScrollArea::vertical().max_height(105.0).show(ui, |ui| {
+                        for (index, name) in dataset_names.iter().enumerate() {
+                            ui.checkbox(
+                                &mut self.processing_settings.selected_datasets[index],
+                                name,
+                            );
+                        }
+                    });
+                } else {
+                    ui.small(format!("将对全部 {} 条曲线应用相同处理。", dataset_names.len()));
+                }
+                ui.label("结果写入方式由上方全局设置决定；批量处理可一次撤销。");
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("对称处理").clicked() {
@@ -612,7 +964,7 @@ impl InstPlotLiteApp {
                     );
                     if ui
                         .button(egui::RichText::new("执行").strong())
-                        .on_hover_text("生成新的局部展平派生列，不修改原始列")
+                        .on_hover_text("按上方结果写入方式应用局部展平")
                         .clicked()
                     {
                         requested = Some((
@@ -678,6 +1030,78 @@ impl InstPlotLiteApp {
                         "去噪".to_owned(),
                     ));
                 }
+
+                ui.separator();
+                ui.strong("公式计算");
+                ui.label(
+                    egui::RichText::new(
+                        "按行计算：含 x 的公式生成新 X 列，含 y 的公式生成新 Y 列；a、b 是下方参数。",
+                    )
+                    .weak(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    for (label, formula) in [
+                        ("a × y + b", "a * y + b"),
+                        ("y + b", "y + b"),
+                        ("a × y", "a * y"),
+                        ("−y", "-y"),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.processing_settings.formula = formula.to_owned();
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("公式：");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.processing_settings.formula)
+                            .desired_width(360.0)
+                            .hint_text("例如：a * y + b"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("a");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.processing_settings.formula_a)
+                            .desired_width(95.0)
+                            .hint_text("例如：10/11"),
+                    );
+                    ui.label("b");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.processing_settings.formula_b)
+                            .desired_width(95.0)
+                            .hint_text("例如：(2+3)/7"),
+                    );
+                    if ui
+                        .button(egui::RichText::new("执行公式").strong())
+                        .on_hover_text("根据公式中的 x 或 y，按上方结果写入方式应用公式")
+                        .clicked()
+                    {
+                        let parameters = (
+                            fitting::evaluate_constant_expression(&self.processing_settings.formula_a),
+                            fitting::evaluate_constant_expression(&self.processing_settings.formula_b),
+                        );
+                        let (Ok(a), Ok(b)) = parameters else {
+                            self.status = "公式系数无效：请输入有限数值或常量表达式，例如 10/11".to_owned();
+                            return;
+                        };
+                        requested = Some((
+                            ProcessingOperation::Formula {
+                                x_column: self.x_column,
+                                expression: self.processing_settings.formula.clone(),
+                                a,
+                                b,
+                            },
+                            "公式".to_owned(),
+                        ));
+                    }
+                });
+                ui.small(
+                    "公式和系数支持 + − × ÷ ^、括号、sin、cos、tan、exp、ln/log、sqrt、abs、arctan，以及 pi、e。",
+                );
+                });
+                ui.add_space(12.0);
+            });
             },
         );
         self.processing_open = open;
@@ -811,10 +1235,11 @@ impl InstPlotLiteApp {
                     .split(',')
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .map(str::parse::<f64>)
+                    .map(fitting::evaluate_constant_expression)
                     .collect::<Result<Vec<_>, _>>();
                 let Ok(parameters) = parameters else {
-                    self.fit_settings.message = "拟合失败：初始参数应为逗号分隔的数值".to_owned();
+                    self.fit_settings.message =
+                        "拟合失败：初始参数应为逗号分隔的有限数值或表达式，例如 10/11".to_owned();
                     return;
                 };
                 FitMethod::Custom {
@@ -866,141 +1291,148 @@ impl InstPlotLiteApp {
                     open = false;
                     return;
                 }
-                let content_rect = ui
-                    .available_rect_before_wrap()
-                    .shrink2(egui::vec2(18.0, 14.0));
-                let mut content_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(content_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                let ui = &mut content_ui;
-                ui.label("使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("数据源");
-                    egui::ComboBox::from_id_salt("fit-source")
-                        .selected_text(if self.fit_settings.merge_datasets {
-                            "全部同名列数据（合并）"
-                        } else {
-                            "当前数据集"
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.fit_settings.merge_datasets,
-                                false,
-                                "当前数据集",
-                            );
-                            ui.selectable_value(
-                                &mut self.fit_settings.merge_datasets,
-                                true,
-                                "全部同名列数据（合并）",
-                            );
-                        });
-                    ui.label("X 单位");
-                    egui::ComboBox::from_id_salt("fit-unit")
-                        .selected_text(unit_conversion_name(self.fit_settings.unit_conversion))
-                        .show_ui(ui, |ui| {
-                            for conversion in [
-                                XUnitConversion::None,
-                                XUnitConversion::DegreesToRadians,
-                                XUnitConversion::RadiansToDegrees,
-                            ] {
-                                ui.selectable_value(
-                                    &mut self.fit_settings.unit_conversion,
-                                    conversion,
-                                    unit_conversion_name(conversion),
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(12.0);
+                        ui.indent("fit-content", |ui| {
+                            ui.spacing_mut().item_spacing.y = 10.0;
+                            ui.label("使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。");
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("数据源");
+                                egui::ComboBox::from_id_salt("fit-source")
+                                    .selected_text(if self.fit_settings.merge_datasets {
+                                        "全部同名列数据（合并）"
+                                    } else {
+                                        "当前数据集"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.fit_settings.merge_datasets,
+                                            false,
+                                            "当前数据集",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.fit_settings.merge_datasets,
+                                            true,
+                                            "全部同名列数据（合并）",
+                                        );
+                                    });
+                                ui.label("X 单位");
+                                egui::ComboBox::from_id_salt("fit-unit")
+                                    .selected_text(unit_conversion_name(
+                                        self.fit_settings.unit_conversion,
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for conversion in [
+                                            XUnitConversion::None,
+                                            XUnitConversion::DegreesToRadians,
+                                            XUnitConversion::RadiansToDegrees,
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut self.fit_settings.unit_conversion,
+                                                conversion,
+                                                unit_conversion_name(conversion),
+                                            );
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.fit_settings.use_x_range, "限制 X");
+                                ui.add_enabled(
+                                    self.fit_settings.use_x_range,
+                                    egui::DragValue::new(&mut self.fit_settings.x_min),
                                 );
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.fit_settings.use_x_range, "限制 X");
-                    ui.add_enabled(
-                        self.fit_settings.use_x_range,
-                        egui::DragValue::new(&mut self.fit_settings.x_min),
-                    );
-                    ui.label("至");
-                    ui.add_enabled(
-                        self.fit_settings.use_x_range,
-                        egui::DragValue::new(&mut self.fit_settings.x_max),
-                    );
-                    ui.checkbox(&mut self.fit_settings.use_y_range, "限制 Y");
-                    ui.add_enabled(
-                        self.fit_settings.use_y_range,
-                        egui::DragValue::new(&mut self.fit_settings.y_min),
-                    );
-                    ui.label("至");
-                    ui.add_enabled(
-                        self.fit_settings.use_y_range,
-                        egui::DragValue::new(&mut self.fit_settings.y_max),
-                    );
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("拟合类型");
-                    egui::ComboBox::from_id_salt("fit-kind")
-                        .selected_text(fit_kind_name(self.fit_settings.kind))
-                        .show_ui(ui, |ui| {
-                            for kind in [
-                                FitKind::Polynomial,
-                                FitKind::Exponential,
-                                FitKind::Logarithmic,
-                                FitKind::Power,
-                                FitKind::Custom,
-                            ] {
-                                ui.selectable_value(
-                                    &mut self.fit_settings.kind,
-                                    kind,
-                                    fit_kind_name(kind),
+                                ui.label("至");
+                                ui.add_enabled(
+                                    self.fit_settings.use_x_range,
+                                    egui::DragValue::new(&mut self.fit_settings.x_max),
                                 );
+                                ui.checkbox(&mut self.fit_settings.use_y_range, "限制 Y");
+                                ui.add_enabled(
+                                    self.fit_settings.use_y_range,
+                                    egui::DragValue::new(&mut self.fit_settings.y_min),
+                                );
+                                ui.label("至");
+                                ui.add_enabled(
+                                    self.fit_settings.use_y_range,
+                                    egui::DragValue::new(&mut self.fit_settings.y_max),
+                                );
+                            });
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("拟合类型");
+                                egui::ComboBox::from_id_salt("fit-kind")
+                                    .selected_text(fit_kind_name(self.fit_settings.kind))
+                                    .show_ui(ui, |ui| {
+                                        for kind in [
+                                            FitKind::Polynomial,
+                                            FitKind::Exponential,
+                                            FitKind::Logarithmic,
+                                            FitKind::Power,
+                                            FitKind::Custom,
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut self.fit_settings.kind,
+                                                kind,
+                                                fit_kind_name(kind),
+                                            );
+                                        }
+                                    });
+                                if self.fit_settings.kind == FitKind::Polynomial {
+                                    ui.label("阶数");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.fit_settings.degree)
+                                            .range(1..=10),
+                                    );
+                                }
+                            });
+                            if self.fit_settings.kind == FitKind::Custom {
+                                ui.add_space(6.0);
+                                editable_fit_field(
+                                    ui,
+                                    "函数表达式（可编辑）",
+                                    "f(x) =",
+                                    &mut self.fit_settings.expression,
+                                    "例如：a * sin(b * x + c)",
+                                );
+                                ui.add_space(8.0);
+                                editable_fit_field(
+                                    ui,
+                                    "初始参数（可编辑）",
+                                    "a, b, c… =",
+                                    &mut self.fit_settings.initial_parameters,
+                                    "例如：1, 10/11, (2+3)/7",
+                                );
+                                ui.small(
+                                "参数按 a、b、c、d、e_param、f、g、h 的顺序填写，用逗号分隔；每项可用分数和括号。",
+                                );
+                                ui.small("支持 + - * / ^、sin、cos、tan、exp、ln/log、sqrt、abs。");
                             }
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button(egui::RichText::new("执行拟合").strong())
+                                    .clicked()
+                                {
+                                    execute = true;
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.fit_overlay.is_some(),
+                                        egui::Button::new("清除拟合曲线"),
+                                    )
+                                    .clicked()
+                                {
+                                    clear = true;
+                                }
+                            });
+                            ui.add_space(8.0);
+                            ui.label(&self.fit_settings.message);
                         });
-                    if self.fit_settings.kind == FitKind::Polynomial {
-                        ui.label("阶数");
-                        ui.add(egui::DragValue::new(&mut self.fit_settings.degree).range(1..=10));
-                    }
-                });
-                if self.fit_settings.kind == FitKind::Custom {
-                    ui.add_space(6.0);
-                    editable_fit_field(
-                        ui,
-                        "函数表达式（可编辑）",
-                        "f(x) =",
-                        &mut self.fit_settings.expression,
-                        "例如：a * sin(b * x + c)",
-                    );
-                    ui.add_space(8.0);
-                    editable_fit_field(
-                        ui,
-                        "初始参数（可编辑）",
-                        "a, b, c… =",
-                        &mut self.fit_settings.initial_parameters,
-                        "例如：1, 1, 0",
-                    );
-                    ui.small("参数按 a、b、c、d、e_param、f、g、h 的顺序填写，用逗号分隔。");
-                    ui.small("支持 + - * / ^、sin、cos、tan、exp、ln/log、sqrt、abs。");
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(egui::RichText::new("执行拟合").strong())
-                        .clicked()
-                    {
-                        execute = true;
-                    }
-                    if ui
-                        .add_enabled(
-                            self.fit_overlay.is_some(),
-                            egui::Button::new("清除拟合曲线"),
-                        )
-                        .clicked()
-                    {
-                        clear = true;
-                    }
-                });
-                ui.add_space(8.0);
-                ui.label(&self.fit_settings.message);
+                        ui.add_space(12.0);
+                    });
             },
         );
         self.fit_open = open;
@@ -1163,6 +1595,7 @@ impl InstPlotLiteApp {
         self.history.clear();
         self.pending_deletion = None;
         self.processing_open = false;
+        self.export_selection = None;
         self.fit_open = false;
         self.fit_overlay = None;
         self.selected_coordinate = None;
@@ -1184,7 +1617,8 @@ impl InstPlotLiteApp {
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已撤销，恢复 {count} 个点"),
-                HistoryEffect::Column(name) => format!("已撤销处理，移除派生列“{name}”"),
+                HistoryEffect::Column(name) => format!("已撤销数据处理“{name}”"),
+                HistoryEffect::Columns(count) => format!("已撤销 {count} 条曲线的数据处理"),
             };
         }
     }
@@ -1195,7 +1629,8 @@ impl InstPlotLiteApp {
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已重做，删除 {count} 个点"),
-                HistoryEffect::Column(name) => format!("已重做处理，恢复派生列“{name}”"),
+                HistoryEffect::Column(name) => format!("已重做数据处理“{name}”"),
+                HistoryEffect::Columns(count) => format!("已重做 {count} 条曲线的数据处理"),
             };
         }
     }
@@ -1250,19 +1685,19 @@ impl eframe::App for InstPlotLiteApp {
                     ui.label(egui::RichText::new("当前数据集").strong());
                     if ui.button("CSV").clicked() {
                         ui.close();
-                        self.export_active_data("csv");
+                        self.open_export_columns("csv");
                     }
                     if ui.button("Excel（XLSX）").clicked() {
                         ui.close();
-                        self.export_active_data("xlsx");
+                        self.open_export_columns("xlsx");
                     }
                     if ui.button("TSV").clicked() {
                         ui.close();
-                        self.export_active_data("tsv");
+                        self.open_export_columns("tsv");
                     }
                     if ui.button("TXT（制表符分隔）").clicked() {
                         ui.close();
-                        self.export_active_data("txt");
+                        self.open_export_columns("txt");
                     }
                     ui.separator();
                     ui.label(egui::RichText::new("全部数据集").strong());
@@ -1585,6 +2020,7 @@ impl eframe::App for InstPlotLiteApp {
         }
         self.show_delete_confirmation(ui.ctx());
         self.show_processing_window(ui.ctx());
+        self.show_export_columns_window(ui.ctx());
         self.show_fit_window(ui.ctx());
     }
 }
@@ -1729,6 +2165,58 @@ fn unit_conversion_name(conversion: XUnitConversion) -> &'static str {
     }
 }
 
+fn processing_operation_with_x(
+    operation: &ProcessingOperation,
+    x_column: usize,
+) -> ProcessingOperation {
+    match operation {
+        ProcessingOperation::PolynomialBackground {
+            fit_min,
+            fit_max,
+            order,
+            ..
+        } => ProcessingOperation::PolynomialBackground {
+            x_column,
+            fit_min: *fit_min,
+            fit_max: *fit_max,
+            order: *order,
+        },
+        ProcessingOperation::LocalFlatten {
+            x1,
+            x2,
+            transition,
+            anchor,
+            strength,
+            ..
+        } => ProcessingOperation::LocalFlatten {
+            x_column,
+            x1: *x1,
+            x2: *x2,
+            transition: *transition,
+            anchor: *anchor,
+            strength: *strength,
+        },
+        ProcessingOperation::Denoise {
+            window_length,
+            polyorder,
+            range,
+        } => ProcessingOperation::Denoise {
+            window_length: *window_length,
+            polyorder: *polyorder,
+            range: range.map(|(_, x1, x2)| (x_column, x1, x2)),
+        },
+        ProcessingOperation::Formula {
+            expression, a, b, ..
+        } => ProcessingOperation::Formula {
+            x_column,
+            expression: expression.clone(),
+            a: *a,
+            b: *b,
+        },
+        _ => operation.clone(),
+    }
+}
+
 fn processing_summary(metadata: &ProcessingMetadata) -> String {
     match metadata {
         ProcessingMetadata::Center { midpoint } => format!("中点 {midpoint:.6}"),
@@ -1747,6 +2235,9 @@ fn processing_summary(metadata: &ProcessingMetadata) -> String {
             window_length,
             polyorder,
         } => format!("窗口 {window_length}，阶数 {polyorder}"),
+        ProcessingMetadata::Formula { expression, a, b } => {
+            format!("公式 {expression}（a={a:.6}，b={b:.6}）")
+        }
     }
 }
 

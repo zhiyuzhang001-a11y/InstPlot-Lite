@@ -1,6 +1,6 @@
 # InstPlot Lite status
 
-Updated: 2026-08-26
+Updated: 2026-09-11
 
 > [!NOTE]
 > InstPlot Lite is now the current user-facing product. The public v0.2.0
@@ -70,9 +70,15 @@ a terminal.
   midpoint centering, the legacy center-then-top-20 normalization sequence,
   polynomial background subtraction (orders 0–5), locally anchored flattening
   with cosine transitions, and Savitzky–Golay denoising over finite segments.
-- Processing creates derived numeric columns, keeps imported values intact, and
-  stores compact deterministic recipes for undo/redo instead of retaining
-  another result-array copy in history.
+- Processing can overwrite the selected source column (the default) or retain
+  a derived numeric column. The choice applies consistently to every operation;
+  both forms can be undone and redone as one atomic multi-curve command.
+- Formula processing applies expressions to the axis they reference (`x` or
+  `y`), supports parameters and common mathematical functions, and accepts
+  constant expressions such as fractions and parenthesized values for formula
+  coefficients and custom-fit initial values.
+- Processing can target the active curve, an explicit multi-selection, or all
+  curves. Each batch validates every target before changing any dataset.
 - A command-line check mode supports remote and CI validation without opening a
   GUI window.
 - Positional file paths are accepted so desktop launchers can open data files
@@ -84,7 +90,7 @@ a terminal.
   Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
   CI verifies the installed Windows and Linux license files; the macOS DMG keeps
   them both in a visible folder and inside the installed app bundle.
-- Forty-eight local tests pass with no compiler warnings, including real XLS and
+- Fifty-eight local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
 
@@ -135,11 +141,14 @@ filter, cancels stale point selections, and fits the plot to the new column pair
 in the same frame. Previously the new label could appear while the curve was
 still filtered by the old X range.
 
-The lightweight processing slice is locally complete. All five algorithms are
-available through a separately movable native **数据处理** window, generate
-exportable derived columns, preserve NaN/Inf positions, and can be undone and
-redone. The denoising implementation reuses fixed convolution weights in the
-interior rather than fitting a new polynomial for every row.
+The lightweight processing slice is locally complete. Symmetry, normalization,
+background removal, local flattening, denoising, and formula calculation are
+available through a separately movable native **数据处理** window. They preserve
+NaN/Inf positions and can be undone and redone; users can choose a single
+curve, several selected curves, or all curves, with a window-wide overwrite or
+retain-derived-columns policy. The denoising implementation reuses fixed
+convolution weights in the interior rather than fitting a new polynomial for
+every row. Current-dataset data export also offers explicit column selection.
 
 The complete source history is merged into `main`. GitHub CI has built and
 validated the Windows x64 installer, macOS arm64 and x86_64 DMGs, Linux amd64
@@ -158,11 +167,12 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The functional scope and unsigned v0.2.0 preview release are complete.
-Remaining stable-release promotion work requires release-owner credentials or
-hands-on devices:
+The unsigned v0.2.0 preview release is complete. The formula, multi-curve,
+column-selection, and revised overwrite/undo workflow is ready for the next
+preview release after cross-platform CI packages it. Stable-release promotion
+still requires release-owner credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
 2. Configure Windows Authenticode signing.
 3. Perform the final mouse-interaction check on clean user machines.
-4. Rebuild signed packages and promote the prerelease to a stable release.
+4. Rebuild signed packages and promote a prerelease to a stable release.

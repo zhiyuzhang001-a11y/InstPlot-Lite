@@ -20,6 +20,12 @@ pub enum FitMethod {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormulaAxis {
+    X,
+    Y,
+}
+
 #[derive(Clone, Debug)]
 pub struct FitResult {
     pub equation: String,
@@ -150,11 +156,7 @@ pub fn fit_values(x: &[f64], y: &[f64], method: &FitMethod) -> Result<FitResult,
                         "初始参数必须是有限数值",
                     ));
                 }
-                let normalized = expression
-                    .trim()
-                    .replace("**", "^")
-                    .replace("log10(", "lg(")
-                    .replace("log(", "ln(");
+                let normalized = normalize_expression(expression);
                 if normalized.is_empty() {
                     return Err(FitError::new("invalid_expression", "自定义表达式不能为空"));
                 }
@@ -212,6 +214,153 @@ pub fn fit_values(x: &[f64], y: &[f64], method: &FitMethod) -> Result<FitResult,
         #[cfg(test)]
         parameters,
     })
+}
+
+/// Evaluates a row-by-row data-processing formula using the same expression
+/// syntax as custom fitting. `x` and `y` refer to the selected plot columns;
+/// `a` and `b` are user-provided scalar parameters.
+pub fn evaluate_formula_values(
+    source: &str,
+    x: &[f64],
+    y: &[f64],
+    a: f64,
+    b: f64,
+) -> Result<Vec<f64>, FitError> {
+    if x.len() != y.len() {
+        return Err(FitError::new("invalid_data", "X 列和 Y 列长度不一致"));
+    }
+    if !a.is_finite() || !b.is_finite() {
+        return Err(FitError::new("invalid_parameters", "a 和 b 必须是有限数值"));
+    }
+    let normalized = normalize_expression(source);
+    if normalized.is_empty() {
+        return Err(FitError::new("invalid_expression", "公式不能为空"));
+    }
+    let axis = formula_output_axis(&normalized)?;
+    let parsed = FormulaExpression::parse(&normalized)?;
+    x.iter()
+        .zip(y)
+        .enumerate()
+        .map(|(row, (x, y))| {
+            let source_value = match axis {
+                FormulaAxis::X => x,
+                FormulaAxis::Y => y,
+            };
+            if !source_value.is_finite() {
+                return Ok(f64::NAN);
+            }
+            let value = parsed.evaluate(*x, *y, a, b).map_err(|error| {
+                FitError::new(
+                    "formula_error",
+                    format!("第 {} 行无法计算：{error}", row + 1),
+                )
+            })?;
+            value.is_finite().then_some(value).ok_or_else(|| {
+                FitError::new(
+                    "formula_error",
+                    format!("第 {} 行结果不是有限数值", row + 1),
+                )
+            })
+        })
+        .collect()
+}
+
+pub fn formula_output_axis(source: &str) -> Result<FormulaAxis, FitError> {
+    let normalized = normalize_expression(source);
+    if normalized.is_empty() {
+        return Err(FitError::new("invalid_expression", "公式不能为空"));
+    }
+    validate_expression_identifiers(&normalized, &["x", "y", "a", "b"])?;
+    let characters: Vec<char> = normalized.chars().collect();
+    let mut index = 0;
+    let mut uses_x = false;
+    let mut uses_y = false;
+    while index < characters.len() {
+        let character = characters[index];
+        if !(character.is_ascii_alphabetic() || character == '_') {
+            index += 1;
+            continue;
+        }
+        if matches!(character, 'e' | 'E')
+            && index > 0
+            && characters[index - 1].is_ascii_digit()
+            && characters
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_digit() || matches!(next, '+' | '-'))
+        {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < characters.len()
+            && (characters[index].is_ascii_alphanumeric() || characters[index] == '_')
+        {
+            index += 1;
+        }
+        match characters[start..index].iter().collect::<String>().as_str() {
+            "x" => uses_x = true,
+            "y" => uses_y = true,
+            _ => {}
+        }
+    }
+    match (uses_x, uses_y) {
+        (true, false) => Ok(FormulaAxis::X),
+        (false, true) => Ok(FormulaAxis::Y),
+        (false, false) => Err(FitError::new(
+            "invalid_expression",
+            "公式必须引用 x 或 y，才能确定要生成的列",
+        )),
+        (true, true) => Err(FitError::new(
+            "ambiguous_formula",
+            "公式同时引用 x 和 y；请拆成一次 X 处理或一次 Y 处理",
+        )),
+    }
+}
+
+pub fn evaluate_constant_expression(source: &str) -> Result<f64, FitError> {
+    let normalized = normalize_expression(source);
+    if normalized.is_empty() {
+        return Err(FitError::new("invalid_expression", "数值表达式不能为空"));
+    }
+    validate_expression_identifiers(&normalized, &[])?;
+    let mut slab = Slab::new();
+    let expression = Parser::new()
+        .parse(&normalized, &mut slab.ps)
+        .map_err(|error| {
+            FitError::new("invalid_expression", format!("无法解析数值表达式：{error}"))
+        })?;
+    let mut namespace = |name: &str, arguments: Vec<f64>| -> Option<f64> {
+        match name {
+            "pi" if arguments.is_empty() => Some(std::f64::consts::PI),
+            "e" if arguments.is_empty() => Some(std::f64::consts::E),
+            "exp" if arguments.len() == 1 => Some(arguments[0].exp()),
+            "ln" if arguments.len() == 1 => Some(arguments[0].ln()),
+            "lg" if arguments.len() == 1 => Some(arguments[0].log10()),
+            "sqrt" if arguments.len() == 1 => Some(arguments[0].sqrt()),
+            "arctan" if arguments.len() == 1 => Some(arguments[0].atan()),
+            "arctan2" if arguments.len() == 2 => Some(arguments[0].atan2(arguments[1])),
+            _ => None,
+        }
+    };
+    let value = expression
+        .from(&slab.ps)
+        .eval(&slab, &mut namespace)
+        .map_err(|error| {
+            FitError::new("invalid_expression", format!("无法计算数值表达式：{error}"))
+        })?;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| FitError::new("invalid_expression", "数值表达式结果必须是有限数值"))
+}
+
+fn normalize_expression(source: &str) -> String {
+    source
+        .trim()
+        .replace("**", "^")
+        .replace("log10(", "lg(")
+        .replace("log(", "ln(")
 }
 
 fn validate_values(x: &[f64], y: &[f64]) -> Result<(), FitError> {
@@ -450,7 +599,9 @@ struct CustomExpression {
 
 impl CustomExpression {
     fn parse(source: &str, parameter_count: usize) -> Result<Self, FitError> {
-        validate_custom_identifiers(source, parameter_count)?;
+        let mut variables = vec!["x"];
+        variables.extend_from_slice(&PARAMETER_NAMES[..parameter_count]);
+        validate_expression_identifiers(source, &variables)?;
         let mut slab = Slab::new();
         let expression = Parser::new().parse(source, &mut slab.ps).map_err(|error| {
             FitError::new("invalid_expression", format!("无法解析表达式：{error}"))
@@ -492,7 +643,46 @@ impl CustomExpression {
     }
 }
 
-fn validate_custom_identifiers(source: &str, parameter_count: usize) -> Result<(), FitError> {
+struct FormulaExpression {
+    slab: Slab,
+    expression: ExpressionI,
+}
+
+impl FormulaExpression {
+    fn parse(source: &str) -> Result<Self, FitError> {
+        validate_expression_identifiers(source, &["x", "y", "a", "b"])?;
+        let mut slab = Slab::new();
+        let expression = Parser::new().parse(source, &mut slab.ps).map_err(|error| {
+            FitError::new("invalid_expression", format!("无法解析公式：{error}"))
+        })?;
+        Ok(Self { slab, expression })
+    }
+
+    fn evaluate(&self, x: f64, y: f64, a: f64, b: f64) -> Result<f64, fasteval2::Error> {
+        let mut namespace = |name: &str, arguments: Vec<f64>| -> Option<f64> {
+            match name {
+                "x" if arguments.is_empty() => Some(x),
+                "y" if arguments.is_empty() => Some(y),
+                "a" if arguments.is_empty() => Some(a),
+                "b" if arguments.is_empty() => Some(b),
+                "pi" if arguments.is_empty() => Some(std::f64::consts::PI),
+                "e" if arguments.is_empty() => Some(std::f64::consts::E),
+                "exp" if arguments.len() == 1 => Some(arguments[0].exp()),
+                "ln" if arguments.len() == 1 => Some(arguments[0].ln()),
+                "lg" if arguments.len() == 1 => Some(arguments[0].log10()),
+                "sqrt" if arguments.len() == 1 => Some(arguments[0].sqrt()),
+                "arctan" if arguments.len() == 1 => Some(arguments[0].atan()),
+                "arctan2" if arguments.len() == 2 => Some(arguments[0].atan2(arguments[1])),
+                _ => None,
+            }
+        };
+        self.expression
+            .from(&self.slab.ps)
+            .eval(&self.slab, &mut namespace)
+    }
+}
+
+fn validate_expression_identifiers(source: &str, variables: &[&str]) -> Result<(), FitError> {
     const FUNCTIONS: [&str; 15] = [
         "sin", "cos", "tan", "sinh", "cosh", "tanh", "exp", "ln", "lg", "sqrt", "abs", "arctan",
         "arctan2", "pi", "e",
@@ -523,8 +713,7 @@ fn validate_custom_identifiers(source: &str, parameter_count: usize) -> Result<(
             index += 1;
         }
         let identifier: String = characters[start..index].iter().collect();
-        let is_parameter = PARAMETER_NAMES[..parameter_count].contains(&identifier.as_str());
-        if identifier != "x" && !is_parameter && !FUNCTIONS.contains(&identifier.as_str()) {
+        if !variables.contains(&identifier.as_str()) && !FUNCTIONS.contains(&identifier.as_str()) {
             return Err(FitError::new(
                 "invalid_expression",
                 format!("不支持的符号：{identifier}"),
@@ -576,7 +765,9 @@ fn numeric_failure() -> FitError {
 
 #[cfg(test)]
 mod tests {
-    use super::{FitMethod, fit_values};
+    use super::{
+        FitMethod, FormulaAxis, evaluate_constant_expression, fit_values, formula_output_axis,
+    };
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -662,6 +853,40 @@ mod tests {
         )
         .unwrap();
         assert!(result.r2 > 0.999_999);
+    }
+
+    #[test]
+    fn formula_axis_follows_the_referenced_coordinate() {
+        assert_eq!(formula_output_axis("2 * x + 1").unwrap(), FormulaAxis::X);
+        assert_eq!(formula_output_axis("sqrt(y)").unwrap(), FormulaAxis::Y);
+        assert_eq!(
+            formula_output_axis("x + y").unwrap_err().code,
+            "ambiguous_formula"
+        );
+        assert_eq!(
+            formula_output_axis("a + b").unwrap_err().code,
+            "invalid_expression"
+        );
+    }
+
+    #[test]
+    fn constant_expressions_support_fractions_parentheses_and_constants() {
+        assert_close(
+            evaluate_constant_expression("10 / 11").unwrap(),
+            10.0 / 11.0,
+            1e-12,
+        );
+        assert_close(
+            evaluate_constant_expression("(2 + 3) / 7").unwrap(),
+            5.0 / 7.0,
+            1e-12,
+        );
+        assert_close(
+            evaluate_constant_expression("pi / 2").unwrap(),
+            std::f64::consts::FRAC_PI_2,
+            1e-12,
+        );
+        assert!(evaluate_constant_expression("1 / 0").is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 pub enum HistoryEffect {
     Rows(usize),
     Column(String),
+    Columns(usize),
 }
 
 #[derive(Debug)]
@@ -29,9 +30,20 @@ struct AddColumnCommand {
 }
 
 #[derive(Debug)]
+struct ReplaceColumnCommand {
+    dataset_index: usize,
+    column_index: usize,
+    previous_values: Vec<f64>,
+    source_column: usize,
+    operation: ProcessingOperation,
+}
+
+#[derive(Debug)]
 enum EditCommand {
     Delete(DeleteCommand),
     AddColumn(AddColumnCommand),
+    AddColumns(Vec<AddColumnCommand>),
+    ReplaceColumns(Vec<ReplaceColumnCommand>),
 }
 
 impl EditCommand {
@@ -43,6 +55,17 @@ impl EditCommand {
             Self::AddColumn(command) => {
                 command.column_name.capacity() + size_of::<AddColumnCommand>()
             }
+            Self::AddColumns(commands) => commands
+                .iter()
+                .map(|command| command.column_name.capacity() + size_of::<AddColumnCommand>())
+                .sum(),
+            Self::ReplaceColumns(commands) => commands
+                .iter()
+                .map(|command| {
+                    command.previous_values.capacity() * size_of::<f64>()
+                        + size_of::<ReplaceColumnCommand>()
+                })
+                .sum(),
         }
     }
 
@@ -65,6 +88,41 @@ impl EditCommand {
                 }
                 dataset.columns.remove(command.column_index);
                 Some(HistoryEffect::Column(command.column_name.clone()))
+            }
+            Self::AddColumns(commands) => {
+                for command in commands.iter().rev() {
+                    let dataset = datasets.get(command.dataset_index)?;
+                    if dataset
+                        .columns
+                        .get(command.column_index)
+                        .is_none_or(|column| column.name != command.column_name)
+                    {
+                        return None;
+                    }
+                }
+                for command in commands.iter().rev() {
+                    datasets[command.dataset_index]
+                        .columns
+                        .remove(command.column_index);
+                }
+                Some(HistoryEffect::Columns(commands.len()))
+            }
+            Self::ReplaceColumns(commands) => {
+                for command in commands {
+                    datasets
+                        .get(command.dataset_index)?
+                        .columns
+                        .get(command.column_index)?;
+                }
+                for command in commands {
+                    let values = &mut datasets
+                        .get_mut(command.dataset_index)?
+                        .columns
+                        .get_mut(command.column_index)?
+                        .values;
+                    *values = command.previous_values.clone();
+                }
+                Some(HistoryEffect::Columns(commands.len()))
             }
         }
     }
@@ -97,6 +155,51 @@ impl EditCommand {
                     },
                 );
                 Some(HistoryEffect::Column(command.column_name.clone()))
+            }
+            Self::AddColumns(commands) => {
+                let mut results = Vec::with_capacity(commands.len());
+                for command in commands {
+                    let dataset = datasets.get(command.dataset_index)?;
+                    if command.column_index > dataset.columns.len() {
+                        return None;
+                    }
+                    let result = processing::apply_to_dataset(
+                        dataset,
+                        command.source_column,
+                        &command.operation,
+                    )
+                    .ok()?;
+                    results.push(result.values);
+                }
+                for (command, values) in commands.iter().zip(results) {
+                    datasets[command.dataset_index].columns.insert(
+                        command.column_index,
+                        NumericColumn {
+                            name: command.column_name.clone(),
+                            values,
+                        },
+                    );
+                }
+                Some(HistoryEffect::Columns(commands.len()))
+            }
+            Self::ReplaceColumns(commands) => {
+                let mut results = Vec::with_capacity(commands.len());
+                for command in commands {
+                    let dataset = datasets.get(command.dataset_index)?;
+                    results.push(
+                        processing::apply_to_dataset(
+                            dataset,
+                            command.source_column,
+                            &command.operation,
+                        )
+                        .ok()?
+                        .values,
+                    );
+                }
+                for (command, values) in commands.iter().zip(results) {
+                    datasets[command.dataset_index].columns[command.column_index].values = values;
+                }
+                Some(HistoryEffect::Columns(commands.len()))
             }
         }
     }
@@ -134,21 +237,52 @@ impl EditHistory {
         }));
     }
 
-    pub fn record_add_column(
+    pub fn record_add_columns(
         &mut self,
-        dataset_index: usize,
-        column_index: usize,
-        column_name: String,
-        source_column: usize,
-        operation: ProcessingOperation,
+        columns: Vec<(usize, usize, String, usize, ProcessingOperation)>,
     ) {
-        self.record(EditCommand::AddColumn(AddColumnCommand {
-            dataset_index,
-            column_index,
-            column_name,
-            source_column,
-            operation,
-        }));
+        let commands = columns
+            .into_iter()
+            .map(
+                |(dataset_index, column_index, column_name, source_column, operation)| {
+                    AddColumnCommand {
+                        dataset_index,
+                        column_index,
+                        column_name,
+                        source_column,
+                        operation,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        match commands.len() {
+            0 => {}
+            1 => self.record(EditCommand::AddColumn(commands.into_iter().next().unwrap())),
+            _ => self.record(EditCommand::AddColumns(commands)),
+        }
+    }
+
+    pub fn record_replace_columns(
+        &mut self,
+        columns: Vec<(usize, usize, Vec<f64>, usize, ProcessingOperation)>,
+    ) {
+        let commands = columns
+            .into_iter()
+            .map(
+                |(dataset_index, column_index, previous_values, source_column, operation)| {
+                    ReplaceColumnCommand {
+                        dataset_index,
+                        column_index,
+                        previous_values,
+                        source_column,
+                        operation,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        if !commands.is_empty() {
+            self.record(EditCommand::ReplaceColumns(commands));
+        }
     }
 
     fn record(&mut self, command: EditCommand) {
@@ -157,7 +291,9 @@ impl EditHistory {
         }
         self.retained_bytes += command.retained_bytes();
         self.undo.push_back(command);
-        while self.undo.len() > MAX_COMMANDS || self.retained_bytes > MAX_HISTORY_BYTES {
+        while self.undo.len() > MAX_COMMANDS
+            || (self.retained_bytes > MAX_HISTORY_BYTES && self.undo.len() > 1)
+        {
             let Some(discarded) = self.undo.pop_front() else {
                 break;
             };
@@ -238,7 +374,7 @@ mod tests {
             values: result.values,
         });
         let mut history = EditHistory::default();
-        history.record_add_column(0, 2, "y [对称]".to_owned(), 1, operation);
+        history.record_add_columns(vec![(0, 2, "y [对称]".to_owned(), 1, operation)]);
 
         assert_eq!(
             history.undo(&mut datasets),
@@ -250,5 +386,74 @@ mod tests {
             Some(HistoryEffect::Column("y [对称]".to_owned()))
         );
         assert_eq!(datasets[0].columns[2].values, [-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn formula_column_history_recomputes_with_saved_parameters() {
+        let mut datasets = vec![dataset()];
+        let operation = ProcessingOperation::Formula {
+            x_column: 0,
+            expression: "a * y + b".to_owned(),
+            a: 2.0,
+            b: 3.0,
+        };
+        let result = crate::processing::apply_to_dataset(&datasets[0], 1, &operation).unwrap();
+        datasets[0].columns.push(NumericColumn {
+            name: "y [公式]".to_owned(),
+            values: result.values,
+        });
+        let mut history = EditHistory::default();
+        history.record_add_columns(vec![(0, 2, "y [公式]".to_owned(), 1, operation)]);
+
+        assert!(history.undo(&mut datasets).is_some());
+        assert!(history.redo(&mut datasets).is_some());
+        assert_eq!(datasets[0].columns[2].values, [3.0, 5.0, 7.0]);
+    }
+
+    #[test]
+    fn batch_derived_columns_undo_and_redo_as_one_command() {
+        let mut datasets = vec![dataset(), dataset()];
+        let operation = ProcessingOperation::Center;
+        let mut commands = Vec::new();
+        for (dataset_index, dataset) in datasets.iter_mut().enumerate() {
+            let result = crate::processing::apply_to_dataset(dataset, 1, &operation).unwrap();
+            let column_index = dataset.columns.len();
+            dataset.columns.push(NumericColumn {
+                name: "y [对称]".to_owned(),
+                values: result.values,
+            });
+            commands.push((
+                dataset_index,
+                column_index,
+                "y [对称]".to_owned(),
+                1,
+                operation.clone(),
+            ));
+        }
+        let mut history = EditHistory::default();
+        history.record_add_columns(commands);
+
+        assert_eq!(history.undo(&mut datasets), Some(HistoryEffect::Columns(2)));
+        assert_eq!(datasets[0].columns.len(), 2);
+        assert_eq!(datasets[1].columns.len(), 2);
+        assert_eq!(history.redo(&mut datasets), Some(HistoryEffect::Columns(2)));
+        assert_eq!(datasets[0].columns[2].values, [-1.0, 0.0, 1.0]);
+        assert_eq!(datasets[1].columns[2].values, [-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn overwritten_columns_restore_the_original_values_on_undo() {
+        let mut datasets = vec![dataset()];
+        let operation = ProcessingOperation::Center;
+        let result = crate::processing::apply_to_dataset(&datasets[0], 1, &operation).unwrap();
+        let previous = std::mem::replace(&mut datasets[0].columns[1].values, result.values);
+        let mut history = EditHistory::default();
+        history.record_replace_columns(vec![(0, 1, previous, 1, operation)]);
+
+        assert_eq!(datasets[0].columns[1].values, [-1.0, 0.0, 1.0]);
+        assert_eq!(history.undo(&mut datasets), Some(HistoryEffect::Columns(1)));
+        assert_eq!(datasets[0].columns[1].values, [0.0, 1.0, 2.0]);
+        assert_eq!(history.redo(&mut datasets), Some(HistoryEffect::Columns(1)));
+        assert_eq!(datasets[0].columns[1].values, [-1.0, 0.0, 1.0]);
     }
 }

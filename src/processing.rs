@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::data::DataSet;
+use crate::{data::DataSet, fitting};
 
 #[derive(Clone, Debug)]
 pub enum ProcessingOperation {
@@ -26,6 +26,12 @@ pub enum ProcessingOperation {
         window_length: usize,
         polyorder: usize,
         range: Option<(usize, f64, f64)>,
+    },
+    Formula {
+        x_column: usize,
+        expression: String,
+        a: f64,
+        b: f64,
     },
 }
 
@@ -56,6 +62,11 @@ pub enum ProcessingMetadata {
     Denoise {
         window_length: usize,
         polyorder: usize,
+    },
+    Formula {
+        expression: String,
+        a: f64,
+        b: f64,
     },
 }
 
@@ -105,7 +116,7 @@ pub fn apply_to_dataset(
         .ok_or_else(|| ProcessingError::new("processing", "missing_column", "Y 列不存在"))?
         .values
         .as_slice();
-    match *operation {
+    match operation {
         ProcessingOperation::Center => center_values(y),
         ProcessingOperation::CenterNormalize { top_n } => {
             let centered = center_values(y)?;
@@ -113,7 +124,7 @@ pub fn apply_to_dataset(
                 ProcessingMetadata::Center { midpoint } => midpoint,
                 _ => unreachable!(),
             };
-            let mut normalized = normalize_values(&centered.values, top_n)?;
+            let mut normalized = normalize_values(&centered.values, *top_n)?;
             if let ProcessingMetadata::Normalize {
                 scale,
                 top_n: actual_top_n,
@@ -134,11 +145,11 @@ pub fn apply_to_dataset(
             fit_max,
             order,
         } => remove_polynomial_background(
-            column_values(dataset, x_column, "background")?,
+            column_values(dataset, *x_column, "background")?,
             y,
-            fit_min,
-            fit_max,
-            order,
+            *fit_min,
+            *fit_max,
+            *order,
         ),
         ProcessingOperation::LocalFlatten {
             x_column,
@@ -148,13 +159,13 @@ pub fn apply_to_dataset(
             anchor,
             strength,
         } => local_flatten_values(
-            column_values(dataset, x_column, "local_flatten")?,
+            column_values(dataset, *x_column, "local_flatten")?,
             y,
-            x1,
-            x2,
-            transition,
-            anchor,
-            strength,
+            *x1,
+            *x2,
+            *transition,
+            *anchor,
+            *strength,
         ),
         ProcessingOperation::Denoise {
             window_length,
@@ -164,9 +175,40 @@ pub fn apply_to_dataset(
             let x_range = range
                 .map(|(column, x1, x2)| Ok((column_values(dataset, column, "denoise")?, x1, x2)))
                 .transpose()?;
-            denoise_values(y, window_length, polyorder, x_range)
+            denoise_values(y, *window_length, *polyorder, x_range)
         }
+        ProcessingOperation::Formula {
+            x_column,
+            expression,
+            a,
+            b,
+        } => formula_values(
+            column_values(dataset, *x_column, "formula")?,
+            y,
+            expression,
+            *a,
+            *b,
+        ),
     }
+}
+
+fn formula_values(
+    x: &[f64],
+    y: &[f64],
+    expression: &str,
+    a: f64,
+    b: f64,
+) -> Result<ProcessingResult, ProcessingError> {
+    let values = fitting::evaluate_formula_values(expression, x, y, a, b)
+        .map_err(|error| ProcessingError::new("formula", error.code, error.reason))?;
+    Ok(ProcessingResult {
+        values,
+        metadata: ProcessingMetadata::Formula {
+            expression: expression.to_owned(),
+            a,
+            b,
+        },
+    })
 }
 
 fn column_values<'a>(
@@ -844,6 +886,96 @@ mod tests {
             &[0.0, 1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0, f64::INFINITY],
             1e-12,
         );
+    }
+
+    #[test]
+    fn formula_uses_y_and_parameters_without_being_affected_by_missing_x() {
+        let dataset = dataset(&[1.0, 2.0, f64::NAN], &[3.0, 4.0, 5.0]);
+        let result = apply_to_dataset(
+            &dataset,
+            1,
+            &ProcessingOperation::Formula {
+                x_column: 0,
+                expression: "a * y + b".to_owned(),
+                a: 2.0,
+                b: -1.0,
+            },
+        )
+        .unwrap();
+        assert_close(&result.values, &[5.0, 7.0, 9.0], 1e-12);
+        assert_eq!(
+            result.metadata,
+            ProcessingMetadata::Formula {
+                expression: "a * y + b".to_owned(),
+                a: 2.0,
+                b: -1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn formula_uses_x_without_being_affected_by_missing_y() {
+        let dataset = dataset(&[1.0, 2.0, 3.0], &[10.0, f64::NAN, 30.0]);
+        let result = apply_to_dataset(
+            &dataset,
+            1,
+            &ProcessingOperation::Formula {
+                x_column: 0,
+                expression: "2 * x + 1".to_owned(),
+                a: 1.0,
+                b: 0.0,
+            },
+        )
+        .unwrap();
+        assert_close(&result.values, &[3.0, 5.0, 7.0], 1e-12);
+    }
+
+    #[test]
+    fn formula_uses_the_actual_parameter_values_during_evaluation() {
+        let dataset = dataset(&[1.0, 2.0], &[3.0, 4.0]);
+        let result = apply_to_dataset(
+            &dataset,
+            1,
+            &ProcessingOperation::Formula {
+                x_column: 0,
+                expression: "y / b".to_owned(),
+                a: 1.0,
+                b: 2.0,
+            },
+        )
+        .unwrap();
+        assert_close(&result.values, &[1.5, 2.0], 1e-12);
+    }
+
+    #[test]
+    fn formula_supports_existing_functions_and_reports_invalid_rows() {
+        let dataset = dataset(&[0.0, 1.0], &[0.0, 1.0]);
+        let result = apply_to_dataset(
+            &dataset,
+            1,
+            &ProcessingOperation::Formula {
+                x_column: 0,
+                expression: "sin(x) + sqrt(x)".to_owned(),
+                a: 1.0,
+                b: 0.0,
+            },
+        )
+        .unwrap();
+        assert_close(&result.values, &[0.0, 1.0 + 1.0_f64.sin()], 1e-12);
+
+        let error = apply_to_dataset(
+            &dataset,
+            1,
+            &ProcessingOperation::Formula {
+                x_column: 0,
+                expression: "x / (x - x)".to_owned(),
+                a: 1.0,
+                b: 0.0,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "formula_error");
+        assert!(error.reason.contains("第 1 行"));
     }
 
     #[test]
