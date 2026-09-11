@@ -3,11 +3,10 @@
 Updated: 2026-09-11
 
 > [!NOTE]
-> InstPlot Lite is now the current user-facing product. The public v0.2.0
-> unsigned preview contains the core workflow; the current development branch
-> additionally includes consistent dark application content, mouse-wheel zoom,
-> bundled license files, and white PNG export with black ticks. These changes
-> are intended for the next preview package.
+> InstPlot Lite is now the current user-facing product. The v0.3.0 unsigned
+> preview contains the core workflow plus formula calculation, multi-curve
+> processing, explicit export-column selection, and reversible overwrite or
+> retain processing results.
 
 ## Overall objective
 
@@ -167,10 +166,8 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.2.0 preview release is complete. The formula, multi-curve,
-column-selection, and revised overwrite/undo workflow is ready for the next
-preview release after cross-platform CI packages it. Stable-release promotion
-still requires release-owner credentials or hands-on devices:
+The unsigned v0.3.0 preview release is complete. Stable-release promotion still
+requires release-owner credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
 2. Configure Windows Authenticode signing.
