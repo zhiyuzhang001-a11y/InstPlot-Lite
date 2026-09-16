@@ -35,6 +35,40 @@ pub struct ExportSummary {
     pub row_count: usize,
 }
 
+pub struct FitCurveExport<'a> {
+    pub name: &'a str,
+    pub points: &'a [[f64; 2]],
+    pub r_squared: f64,
+}
+
+/// Writes all currently displayed fitted curves to one portable CSV file.
+/// A long row layout keeps curves with different sample counts unambiguous.
+pub fn save_fit_curves_csv(path: &Path, curves: &[FitCurveExport<'_>]) -> Result<usize, String> {
+    if curves.is_empty() {
+        return Err("没有可导出的拟合曲线".to_owned());
+    }
+    let mut writer = csv::Writer::from_path(path).map_err(|error| error.to_string())?;
+    writer
+        .write_record(["拟合曲线", "X", "Y", "R²"])
+        .map_err(|error| error.to_string())?;
+    let mut row_count = 0_usize;
+    for curve in curves {
+        for [x, y] in curve.points {
+            writer
+                .write_record([
+                    curve.name,
+                    &x.to_string(),
+                    &y.to_string(),
+                    &curve.r_squared.to_string(),
+                ])
+                .map_err(|error| error.to_string())?;
+            row_count += 1;
+        }
+    }
+    writer.flush().map_err(|error| error.to_string())?;
+    Ok(row_count)
+}
+
 pub fn suggested_file_stem(dataset: &DataSet) -> String {
     dataset_export_base(dataset)
 }
@@ -326,8 +360,8 @@ fn unique_sheet_name(value: &str, used: &mut HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        TextExportFormat, encode_retained_rows, encode_retained_rows_selected, save_all_text,
-        save_workbook,
+        FitCurveExport, TextExportFormat, encode_retained_rows, encode_retained_rows_selected,
+        save_all_text, save_fit_curves_csv, save_workbook,
     };
     use crate::data::{DataSet, NumericColumn, read_data_file};
     use std::path::PathBuf;
@@ -378,6 +412,27 @@ mod tests {
         let bytes = encode_retained_rows_selected(&dataset("sample.csv"), &[1], b',').unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert_eq!(text, "信号\n4\n\"\"\n");
+    }
+
+    #[test]
+    fn fitted_curve_export_keeps_each_curve_name_and_points() {
+        let directory = temporary_directory("fitted-curves");
+        let path = directory.join("fits.csv");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        let written = save_fit_curves_csv(
+            &path,
+            &[FitCurveExport {
+                name: "sample · 拟合 1",
+                points: &points,
+                r_squared: 0.98,
+            }],
+        )
+        .unwrap();
+        assert_eq!(written, 2);
+        let csv = std::fs::read_to_string(path).unwrap();
+        assert!(csv.contains("拟合曲线,X,Y,R²"));
+        assert!(csv.contains("sample · 拟合 1,0,1,0.98"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

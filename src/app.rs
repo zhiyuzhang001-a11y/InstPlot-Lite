@@ -135,6 +135,7 @@ impl Default for FitSettings {
 struct FitOverlay {
     points: Vec<[f64; 2]>,
     r2: f64,
+    name: String,
 }
 
 impl Default for ProcessingSettings {
@@ -185,7 +186,7 @@ pub struct InstPlotLiteApp {
     export_selection: Option<ExportSelection>,
     fit_open: bool,
     fit_settings: FitSettings,
-    fit_overlay: Option<FitOverlay>,
+    fit_overlays: Vec<FitOverlay>,
     selected_coordinate: Option<[f64; 2]>,
     status: String,
 }
@@ -220,7 +221,7 @@ impl InstPlotLiteApp {
             export_selection: None,
             fit_open: false,
             fit_settings: FitSettings::default(),
-            fit_overlay: None,
+            fit_overlays: Vec::new(),
             selected_coordinate: None,
             status: "打开或拖入数据：TXT、CSV、DAT、TSV、XLSX、XLS".to_owned(),
         };
@@ -242,6 +243,14 @@ impl InstPlotLiteApp {
     }
 
     fn load_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        let had_datasets = !self.datasets.is_empty();
+        let previous_column_names = self.datasets.get(self.active_dataset).and_then(|dataset| {
+            Some((
+                dataset.columns.get(self.x_column)?.name.clone(),
+                dataset.columns.get(self.y_column)?.name.clone(),
+            ))
+        });
+        let first_new_dataset = self.datasets.len();
         let mut loaded_files = 0_usize;
         let mut loaded_datasets = 0_usize;
         let mut last_summary = String::new();
@@ -267,22 +276,23 @@ impl InstPlotLiteApp {
             }
         }
         if loaded_datasets > 0 {
-            self.fit_overlay = None;
             self.selected_coordinate = None;
-            self.active_dataset = self.datasets.len().saturating_sub(1);
-            let column_count = self
-                .datasets
-                .get(self.active_dataset)
-                .map_or(0, |data| data.columns.len());
-            self.x_column = self.x_column.min(column_count.saturating_sub(1));
-            self.y_column = if column_count > 1 { 1 } else { 0 };
+            self.active_dataset = first_new_dataset;
+            let column_names = self.column_names();
+            (self.x_column, self.y_column) =
+                preferred_import_columns(&column_names, previous_column_names.as_ref());
             self.reset_view = true;
             self.visible_x_range = None;
         }
         self.status = match (loaded_files, errors.is_empty()) {
             (0, _) => errors.join("；"),
             (_, true) => format!(
-                "已导入 {loaded_files} 个文件，共 {loaded_datasets} 个数据集；{last_summary}"
+                "已导入 {loaded_files} 个文件，共 {loaded_datasets} 个数据集；{last_summary}{}",
+                if had_datasets && previous_column_names.is_some() {
+                    "；新文件已优先匹配已有 X/Y 列"
+                } else {
+                    ""
+                }
             ),
             (_, false) => format!(
                 "已导入 {loaded_files} 个文件，共 {loaded_datasets} 个数据集；另有 {} 个失败：{}",
@@ -331,6 +341,39 @@ impl InstPlotLiteApp {
                 )
             }
             Err(error) => self.status = format!("数据导出失败：{error}"),
+        }
+    }
+
+    fn export_fit_curves(&mut self) {
+        if self.fit_overlays.is_empty() {
+            self.status = "没有可导出的拟合曲线".to_owned();
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("CSV 数据", &["csv"])
+            .set_file_name("fitted-curves.csv")
+            .save_file()
+        else {
+            return;
+        };
+        let curves = self
+            .fit_overlays
+            .iter()
+            .map(|fit| data_export::FitCurveExport {
+                name: &fit.name,
+                points: &fit.points,
+                r_squared: fit.r2,
+            })
+            .collect::<Vec<_>>();
+        match data_export::save_fit_curves_csv(&path, &curves) {
+            Ok(row_count) => {
+                self.status = format!(
+                    "已导出 {} 条拟合曲线、{row_count} 个点：{}",
+                    curves.len(),
+                    path.display()
+                )
+            }
+            Err(error) => self.status = format!("拟合曲线导出失败：{error}"),
         }
     }
 
@@ -532,7 +575,7 @@ impl InstPlotLiteApp {
         let changed = dataset.delete_rows(&pending.rows);
         let count = changed.len();
         self.history.record_delete(pending.dataset_index, changed);
-        self.fit_overlay = None;
+        self.fit_overlays.clear();
         self.status = format!("已删除 {count} 个点；可使用撤销恢复");
     }
 
@@ -747,7 +790,7 @@ impl InstPlotLiteApp {
         } else {
             self.history.record_add_columns(added_columns);
         }
-        self.fit_overlay = None;
+        self.fit_overlays.clear();
         if let Some(column_index) = active_result_column {
             if formula_targets_x {
                 self.x_column = column_index;
@@ -855,7 +898,6 @@ impl InstPlotLiteApp {
                     if self.active_dataset != previous_dataset {
                         self.clamp_columns();
                         self.reset_after_coordinate_change();
-                        self.fit_overlay = None;
                     }
                 } else if self.processing_settings.scope == ProcessingScope::Selected {
                     ui.horizontal(|ui| {
@@ -1258,11 +1300,22 @@ impl InstPlotLiteApp {
                     "拟合方程：{}\nR² = {:.6}\n使用点数：{point_count}",
                     result.equation, result.r2
                 );
-                self.status = format!("拟合完成：R² = {:.6}，使用 {point_count} 个点", result.r2);
-                self.fit_overlay = Some(FitOverlay {
+                let source_name = self
+                    .datasets
+                    .get(self.active_dataset)
+                    .map(data::DataSet::display_name)
+                    .unwrap_or_else(|| "未命名数据".to_owned());
+                let fit_number = self.fit_overlays.len() + 1;
+                self.fit_overlays.push(FitOverlay {
                     points: result.points,
                     r2: result.r2,
+                    name: format!("{source_name} · 拟合 {fit_number} · R²={:.4}", result.r2),
                 });
+                self.status = format!(
+                    "拟合完成：R² = {:.6}，使用 {point_count} 个点；当前保留 {} 条拟合曲线",
+                    result.r2,
+                    self.fit_overlays.len()
+                );
             }
             Err(error) => {
                 self.fit_settings.message = format!("拟合失败：{}", error.reason);
@@ -1420,8 +1473,8 @@ impl InstPlotLiteApp {
                                 }
                                 if ui
                                     .add_enabled(
-                                        self.fit_overlay.is_some(),
-                                        egui::Button::new("清除拟合曲线"),
+                                        !self.fit_overlays.is_empty(),
+                                        egui::Button::new("清除全部拟合曲线"),
                                     )
                                     .clicked()
                                 {
@@ -1441,9 +1494,9 @@ impl InstPlotLiteApp {
             context.request_repaint();
         }
         if clear {
-            self.fit_overlay = None;
-            self.fit_settings.message = "拟合曲线已清除。".to_owned();
-            self.status = "已清除拟合曲线".to_owned();
+            self.fit_overlays.clear();
+            self.fit_settings.message = "已清除全部拟合曲线。".to_owned();
+            self.status = "已清除全部拟合曲线".to_owned();
         }
     }
 
@@ -1530,7 +1583,6 @@ impl InstPlotLiteApp {
         if self.active_dataset != previous_dataset {
             self.clamp_columns();
             self.reset_after_coordinate_change();
-            self.fit_overlay = None;
         }
 
         let column_names = self.column_names();
@@ -1571,7 +1623,6 @@ impl InstPlotLiteApp {
         }
         if (self.x_column, self.y_column) != previous_columns {
             self.reset_after_coordinate_change();
-            self.fit_overlay = None;
             let x_name = column_names
                 .get(self.x_column)
                 .map(String::as_str)
@@ -1597,7 +1648,7 @@ impl InstPlotLiteApp {
         self.processing_open = false;
         self.export_selection = None;
         self.fit_open = false;
-        self.fit_overlay = None;
+        self.fit_overlays.clear();
         self.selected_coordinate = None;
         self.status = "已清空数据".to_owned();
     }
@@ -1613,7 +1664,7 @@ impl InstPlotLiteApp {
 
     fn undo(&mut self) {
         if let Some(effect) = self.history.undo(&mut self.datasets) {
-            self.fit_overlay = None;
+            self.fit_overlays.clear();
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已撤销，恢复 {count} 个点"),
@@ -1625,7 +1676,7 @@ impl InstPlotLiteApp {
 
     fn redo(&mut self) {
         if let Some(effect) = self.history.redo(&mut self.datasets) {
-            self.fit_overlay = None;
+            self.fit_overlays.clear();
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已重做，删除 {count} 个点"),
@@ -1698,6 +1749,18 @@ impl eframe::App for InstPlotLiteApp {
                     if ui.button("TXT（制表符分隔）").clicked() {
                         ui.close();
                         self.open_export_columns("txt");
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("拟合曲线").strong());
+                    if ui
+                        .add_enabled(
+                            !self.fit_overlays.is_empty(),
+                            egui::Button::new("导出全部拟合曲线（CSV）"),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.export_fit_curves();
                     }
                     ui.separator();
                     ui.label(egui::RichText::new("全部数据集").strong());
@@ -1909,10 +1972,10 @@ impl eframe::App for InstPlotLiteApp {
                         );
                     }
                 }
-                if let Some(fit) = &self.fit_overlay {
+                for (fit_index, fit) in self.fit_overlays.iter().enumerate() {
                     plot_ui.line(
-                        Line::new(format!("拟合 R²={:.4}", fit.r2), fit.points.clone())
-                            .color(Color32::from_rgb(255, 196, 64))
+                        Line::new(fit.name.clone(), fit.points.clone())
+                            .color(fit_color(fit_index))
                             .width(2.5),
                     );
                 }
@@ -2033,6 +2096,29 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
         maximum = maximum.max(value);
     }
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
+}
+
+fn preferred_import_columns(
+    column_names: &[String],
+    previous: Option<&(String, String)>,
+) -> (usize, usize) {
+    let default_y = usize::from(column_names.len() > 1);
+    let x_column = previous
+        .and_then(|(x_name, _)| column_names.iter().position(|name| name == x_name))
+        .unwrap_or(0);
+    let y_column = previous
+        .and_then(|(_, y_name)| column_names.iter().position(|name| name == y_name))
+        .filter(|index| *index != x_column)
+        .unwrap_or_else(|| {
+            if default_y != x_column {
+                default_y
+            } else {
+                (0..column_names.len())
+                    .find(|index| *index != x_column)
+                    .unwrap_or(x_column)
+            }
+        });
+    (x_column, y_column)
 }
 
 fn configure_interface_style(context: &egui::Context) {
@@ -2278,9 +2364,23 @@ fn series_color(index: usize) -> Color32 {
     COLORS[index % COLORS.len()]
 }
 
+fn fit_color(index: usize) -> Color32 {
+    const COLORS: [Color32; 6] = [
+        Color32::from_rgb(255, 196, 64),
+        Color32::from_rgb(246, 126, 188),
+        Color32::from_rgb(143, 220, 220),
+        Color32::from_rgb(184, 153, 255),
+        Color32::from_rgb(255, 160, 94),
+        Color32::from_rgb(166, 223, 105),
+    ];
+    COLORS[index % COLORS.len()]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{configure_interface_style, demo_curve, wheel_zoom_factor};
+    use super::{
+        configure_interface_style, demo_curve, preferred_import_columns, wheel_zoom_factor,
+    };
     use eframe::egui;
 
     #[test]
@@ -2307,5 +2407,17 @@ mod tests {
         let points = demo_curve(512);
         assert_eq!(points.len(), 512);
         assert!(points.iter().flatten().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn imported_dataset_prefers_existing_coordinate_column_names() {
+        let columns = ["signal", "temperature", "field"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            preferred_import_columns(&columns, Some(&("field".to_owned(), "signal".to_owned())),),
+            (2, 0)
+        );
     }
 }
