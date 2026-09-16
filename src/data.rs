@@ -16,10 +16,27 @@ pub struct NumericColumn {
     pub values: Vec<f64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DataSetKind {
+    #[default]
+    Source,
+    Fit,
+}
+
+impl DataSetKind {
+    pub fn metadata_value(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Fit => "fit",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DataSet {
     pub source: PathBuf,
     pub label: Option<String>,
+    pub kind: DataSetKind,
     pub encoding: String,
     pub separator: String,
     pub columns: Vec<NumericColumn>,
@@ -415,6 +432,7 @@ fn spreadsheet_range_to_dataset(
     Ok(DataSet {
         source: path.to_path_buf(),
         label: None,
+        kind: spreadsheet_dataset_kind(&rows[..data_position])?,
         encoding: "Excel 工作簿".to_owned(),
         separator: format!("工作表 {sheet_name}"),
         columns,
@@ -445,6 +463,40 @@ fn spreadsheet_cell_text(cell: &Data) -> String {
     cell.to_string().replace(['\r', '\n'], " ")
 }
 
+fn parse_dataset_kind(value: &str) -> Result<DataSetKind, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "source" => Ok(DataSetKind::Source),
+        "fit" => Ok(DataSetKind::Fit),
+        value => Err(format!(
+            "不支持的 InstPlot 数据区类型“{value}”，应为 source 或 fit"
+        )),
+    }
+}
+
+fn spreadsheet_dataset_kind(metadata_rows: &[&[Data]]) -> Result<DataSetKind, ImportError> {
+    let mut kind = None;
+    for (row_index, row) in metadata_rows.iter().enumerate() {
+        let Some(value) = row
+            .first()
+            .map(spreadsheet_cell_text)
+            .and_then(|text| text.trim().strip_prefix("# Type:").map(str::to_owned))
+        else {
+            continue;
+        };
+        if kind.is_some() {
+            return Err(ImportError::at_line(
+                "duplicate_section_type",
+                row_index + 1,
+                "同一工作表只能包含一个 InstPlot Type 元数据",
+            ));
+        }
+        kind = Some(parse_dataset_kind(&value).map_err(|reason| {
+            ImportError::at_line("invalid_section_type", row_index + 1, reason)
+        })?);
+    }
+    Ok(kind.unwrap_or_default())
+}
+
 #[cfg(test)]
 fn read_data_bytes(path: &Path, bytes: &[u8]) -> Result<DataSet, ImportError> {
     let (text, encoding) = decode_text(bytes)?;
@@ -470,6 +522,7 @@ fn parse_text_datasets(
         .unwrap_or("未命名文件");
     let mut datasets = Vec::new();
     let mut section_name = None::<String>;
+    let mut section_kind = None::<DataSetKind>;
     let mut section_lines = Vec::<&str>::new();
     let mut section_start = 0_usize;
 
@@ -484,6 +537,7 @@ fn parse_text_datasets(
                 ));
             }
             section_name = Some(format!("数据区 {}", datasets.len() + 1));
+            section_kind = None;
             section_lines.clear();
             section_start = line_index + 1;
             continue;
@@ -504,6 +558,7 @@ fn parse_text_datasets(
                     ..error
                 })?;
             dataset.label = Some(format!("{file_name} — {name}"));
+            dataset.kind = section_kind.take().unwrap_or_default();
             datasets.push(dataset);
             section_lines.clear();
             continue;
@@ -514,6 +569,17 @@ fn parse_text_datasets(
                 if !name.is_empty() {
                     *current_name = name.to_owned();
                 }
+            } else if let Some(value) = trimmed.strip_prefix("# Type:") {
+                if section_kind.is_some() {
+                    return Err(ImportError::at_line(
+                        "duplicate_section_type",
+                        line_index + 1,
+                        "同一 InstPlot 数据区只能包含一个 Type 元数据",
+                    ));
+                }
+                section_kind = Some(parse_dataset_kind(value).map_err(|reason| {
+                    ImportError::at_line("invalid_section_type", line_index + 1, reason)
+                })?);
             } else {
                 section_lines.push(line);
             }
@@ -695,6 +761,7 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
     Ok(DataSet {
         source: path.to_path_buf(),
         label: None,
+        kind: DataSetKind::Source,
         encoding,
         separator: separator.label(),
         columns,
@@ -780,7 +847,7 @@ fn clean_header(header: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportError, read_data_bytes, read_data_file};
+    use super::{DataSetKind, ImportError, read_data_bytes, read_data_file};
     use rust_xlsxwriter::Workbook;
     use std::path::{Path, PathBuf};
 
@@ -807,7 +874,7 @@ mod tests {
         let path = temporary_path("sections.csv");
         std::fs::write(
             &path,
-            b"# -----BEGIN INSTPLOT DATA-----\n# Name: original\nx,y\n1,2\n3,4\n# -----END INSTPLOT DATA-----\n\n# -----BEGIN INSTPLOT DATA-----\n# Name: fitted\nX,Y,R2\n1,2.1,0.99\n3,3.9,0.99\n# -----END INSTPLOT DATA-----\n",
+            b"# -----BEGIN INSTPLOT DATA-----\n# Name: original\n# Type: source\nx,y\n1,2\n3,4\n# -----END INSTPLOT DATA-----\n\n# -----BEGIN INSTPLOT DATA-----\n# Name: fitted\n# Type: fit\nX,Y,R2\n1,2.1,0.99\n3,3.9,0.99\n# -----END INSTPLOT DATA-----\n",
         )
         .unwrap();
 
@@ -815,9 +882,35 @@ mod tests {
         assert_eq!(datasets.len(), 2);
         assert!(datasets[0].display_name().contains("original"));
         assert!(datasets[1].display_name().contains("fitted"));
+        assert_eq!(datasets[0].kind, DataSetKind::Source);
+        assert_eq!(datasets[1].kind, DataSetKind::Fit);
         assert_eq!(datasets[0].columns[1].values, [2.0, 4.0]);
         assert_eq!(datasets[1].columns[1].values, [2.1, 3.9]);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_or_duplicate_section_type_is_rejected() {
+        for (name, metadata, expected_code) in [
+            ("invalid", "# Type: other", "invalid_section_type"),
+            (
+                "duplicate",
+                "# Type: source\n# Type: fit",
+                "duplicate_section_type",
+            ),
+        ] {
+            let path = temporary_path(&format!("{name}-type.csv"));
+            std::fs::write(
+                &path,
+                format!(
+                    "# -----BEGIN INSTPLOT DATA-----\n{metadata}\nx,y\n1,2\n# -----END INSTPLOT DATA-----\n"
+                ),
+            )
+            .unwrap();
+            let error = read_data_file(&path).unwrap_err();
+            assert_eq!(error.code, expected_code);
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

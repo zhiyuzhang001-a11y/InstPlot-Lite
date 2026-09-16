@@ -327,7 +327,7 @@ impl EditHistory {
 #[cfg(test)]
 mod tests {
     use super::{EditHistory, HistoryEffect};
-    use crate::data::{DataSet, NumericColumn};
+    use crate::data::{DataSet, DataSetKind, NumericColumn};
     use crate::processing::ProcessingOperation;
     use std::path::PathBuf;
 
@@ -335,6 +335,7 @@ mod tests {
         DataSet {
             source: PathBuf::from("sample.csv"),
             label: None,
+            kind: DataSetKind::Source,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![

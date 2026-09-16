@@ -749,13 +749,14 @@ mod tests {
         center_values, denoise_values, fit_polynomial, local_flatten_values, normalize_values,
         remove_polynomial_background,
     };
-    use crate::data::{DataSet, NumericColumn};
+    use crate::data::{DataSet, DataSetKind, NumericColumn};
     use std::path::PathBuf;
 
     fn dataset(x: &[f64], y: &[f64]) -> DataSet {
         DataSet {
             source: PathBuf::from("processing.csv"),
             label: None,
+            kind: DataSetKind::Source,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![

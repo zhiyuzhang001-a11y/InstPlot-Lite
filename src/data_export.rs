@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::Workbook;
 
-use crate::data::DataSet;
+use crate::data::{DataSet, DataSetKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextExportFormat {
@@ -74,8 +74,10 @@ pub fn save_retained_rows_selected_with_fits(
         "dat" => TextExportFormat::Dat,
         _ => return Err(format!("不支持的数据导出格式：.{extension}")),
     };
-    let bytes = encode_sectioned_text(dataset, columns, fits, format.delimiter())?;
-    std::fs::write(path, bytes).map_err(|error| error.to_string())?;
+    let file = File::create(path).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+    write_text_export(&mut writer, dataset, columns, fits, format.delimiter())?;
+    writer.flush().map_err(|error| error.to_string())?;
     Ok(retained_row_count(dataset))
 }
 
@@ -118,8 +120,13 @@ pub fn save_all_text_with_fits(
         let base = format!("{}-cleaned", dataset_export_base(dataset));
         let path = unique_text_path(directory, &base, format.extension(), &mut reserved_names);
         let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
-        let bytes = encode_sectioned_text(dataset, &columns, fits, format.delimiter())?;
-        std::fs::write(&path, bytes).map_err(|error| format!("{}：{error}", path.display()))?;
+        let file = File::create(&path).map_err(|error| format!("{}：{error}", path.display()))?;
+        let mut writer = BufWriter::new(file);
+        write_text_export(&mut writer, dataset, &columns, fits, format.delimiter())
+            .map_err(|error| format!("{}：{error}", path.display()))?;
+        writer
+            .flush()
+            .map_err(|error| format!("{}：{error}", path.display()))?;
         row_count += retained_row_count(dataset);
     }
     Ok(ExportSummary {
@@ -141,7 +148,15 @@ pub fn save_all_text_combined(
     let mut writer = BufWriter::new(file);
     let mut row_count = 0_usize;
     let mut needs_separator = false;
-    for dataset in datasets {
+    for dataset in datasets
+        .iter()
+        .filter(|dataset| dataset.kind == DataSetKind::Source)
+        .chain(
+            datasets
+                .iter()
+                .filter(|dataset| dataset.kind == DataSetKind::Fit),
+        )
+    {
         if needs_separator {
             writer.write_all(b"\n").map_err(|error| error.to_string())?;
         }
@@ -190,7 +205,15 @@ fn save_workbook_with_columns(
     let mut used_sheet_names = HashSet::new();
     let mut total_rows = 0_usize;
 
-    for dataset in datasets {
+    for dataset in datasets
+        .iter()
+        .filter(|dataset| dataset.kind == DataSetKind::Source)
+        .chain(
+            datasets
+                .iter()
+                .filter(|dataset| dataset.kind == DataSetKind::Fit),
+        )
+    {
         let columns: Vec<usize> = selected_columns
             .map(|columns| columns.to_vec())
             .unwrap_or_else(|| (0..dataset.columns.len()).collect());
@@ -200,16 +223,19 @@ fn save_workbook_with_columns(
         worksheet
             .set_name(&sheet_name)
             .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(0, 0, format!("# Type: {}", dataset.kind.metadata_value()))
+            .map_err(|error| error.to_string())?;
         for (output_index, source_index) in columns.iter().copied().enumerate() {
             let column = &dataset.columns[source_index];
             let column_index =
                 u16::try_from(output_index).map_err(|_| "列数超过 XLSX 支持范围".to_owned())?;
             worksheet
-                .write_string(0, column_index, &column.name)
+                .write_string(1, column_index, &column.name)
                 .map_err(|error| error.to_string())?;
         }
 
-        let mut output_row = 1_u32;
+        let mut output_row = 2_u32;
         for row_index in 0..dataset.row_count {
             if !dataset.alive.get(row_index).copied().unwrap_or(false) {
                 continue;
@@ -229,7 +255,7 @@ fn save_workbook_with_columns(
                 .checked_add(1)
                 .ok_or_else(|| "行数超过 XLSX 支持范围".to_owned())?;
         }
-        total_rows += usize::try_from(output_row - 1).unwrap_or(usize::MAX);
+        total_rows += usize::try_from(output_row - 2).unwrap_or(usize::MAX);
     }
 
     for fit in fits {
@@ -238,13 +264,16 @@ fn save_workbook_with_columns(
         worksheet
             .set_name(&sheet_name)
             .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(0, 0, "# Type: fit")
+            .map_err(|error| error.to_string())?;
         for (column, header) in ["X", "拟合 Y", "R²"].into_iter().enumerate() {
             worksheet
-                .write_string(0, column as u16, header)
+                .write_string(1, column as u16, header)
                 .map_err(|error| error.to_string())?;
         }
         for (row, [x, y]) in fit.points.iter().enumerate() {
-            let row = u32::try_from(row + 1).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
+            let row = u32::try_from(row + 2).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
             worksheet
                 .write_number(row, 0, *x)
                 .map_err(|error| error.to_string())?;
@@ -271,23 +300,23 @@ fn encode_retained_rows(dataset: &DataSet, delimiter: u8) -> Result<Vec<u8>, Str
     encode_retained_rows_selected(dataset, &columns, delimiter)
 }
 
-fn encode_sectioned_text(
+fn write_text_export(
+    output: &mut impl Write,
     dataset: &DataSet,
     columns: &[usize],
     fits: &[FitCurveExport<'_>],
     delimiter: u8,
-) -> Result<Vec<u8>, String> {
-    if fits.is_empty() {
-        return encode_retained_rows_selected(dataset, columns, delimiter);
+) -> Result<(), String> {
+    if fits.is_empty() && dataset.kind == DataSetKind::Source {
+        return write_retained_rows_selected(output, dataset, columns, delimiter);
     }
     validate_fit_compatible_selection(columns, fits)?;
-    let mut output = Vec::new();
-    write_source_section(&mut output, dataset, columns, delimiter)?;
+    write_source_section(output, dataset, columns, delimiter)?;
     for fit in fits {
         output.write_all(b"\n").map_err(|error| error.to_string())?;
-        write_fit_section(&mut output, fit, delimiter)?;
+        write_fit_section(output, fit, delimiter)?;
     }
-    Ok(output)
+    Ok(())
 }
 
 fn write_source_section(
@@ -305,11 +334,9 @@ fn write_source_section(
         .write_all(format!("# Name: {}\n", metadata_text(&dataset.display_name())).as_bytes())
         .map_err(|error| error.to_string())?;
     output
-        .write_all(b"# Type: source\n\n")
+        .write_all(format!("# Type: {}\n\n", dataset.kind.metadata_value()).as_bytes())
         .map_err(|error| error.to_string())?;
-    output
-        .write_all(&encode_retained_rows_selected(dataset, columns, delimiter)?)
-        .map_err(|error| error.to_string())?;
+    write_retained_rows_selected(output, dataset, columns, delimiter)?;
     output.write_all(b"\n").map_err(|error| error.to_string())?;
     output
         .write_all(END.as_bytes())
@@ -332,20 +359,20 @@ fn write_fit_section(
     output
         .write_all(b"# Type: fit\n\n")
         .map_err(|error| error.to_string())?;
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(delimiter)
-        .from_writer(Vec::new());
-    writer
-        .write_record(["X", "拟合 Y", "R²"])
-        .map_err(|error| error.to_string())?;
-    for [x, y] in fit.points {
+    {
+        let mut writer = csv::WriterBuilder::new()
+            .delimiter(delimiter)
+            .from_writer(&mut *output);
         writer
-            .write_record([x.to_string(), y.to_string(), fit.r_squared.to_string()])
+            .write_record(["X", "拟合 Y", "R²"])
             .map_err(|error| error.to_string())?;
+        for [x, y] in fit.points {
+            writer
+                .write_record([x.to_string(), y.to_string(), fit.r_squared.to_string()])
+                .map_err(|error| error.to_string())?;
+        }
+        writer.flush().map_err(|error| error.to_string())?;
     }
-    output
-        .write_all(&writer.into_inner().map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
     output.write_all(b"\n").map_err(|error| error.to_string())?;
     output
         .write_all(END.as_bytes())
@@ -356,15 +383,27 @@ fn metadata_text(value: &str) -> String {
     value.replace(['\r', '\n'], " ").trim().to_owned()
 }
 
+#[cfg(test)]
 fn encode_retained_rows_selected(
     dataset: &DataSet,
     columns: &[usize],
     delimiter: u8,
 ) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    write_retained_rows_selected(&mut output, dataset, columns, delimiter)?;
+    Ok(output)
+}
+
+fn write_retained_rows_selected(
+    output: &mut impl Write,
+    dataset: &DataSet,
+    columns: &[usize],
+    delimiter: u8,
+) -> Result<(), String> {
     validate_column_selection(dataset, columns)?;
     let mut writer = csv::WriterBuilder::new()
         .delimiter(delimiter)
-        .from_writer(Vec::new());
+        .from_writer(output);
     writer
         .write_record(
             columns
@@ -392,7 +431,7 @@ fn encode_retained_rows_selected(
             .write_record(&fields)
             .map_err(|error| error.to_string())?;
     }
-    writer.into_inner().map_err(|error| error.to_string())
+    writer.flush().map_err(|error| error.to_string())
 }
 
 fn validate_column_selection(dataset: &DataSet, columns: &[usize]) -> Result<(), String> {
@@ -530,7 +569,7 @@ mod tests {
         save_all_text, save_all_text_combined, save_retained_rows_selected_with_fits,
         save_workbook, save_workbook_with_fits,
     };
-    use crate::data::{DataSet, NumericColumn, read_data_file};
+    use crate::data::{DataSet, DataSetKind, NumericColumn, read_data_file};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -540,6 +579,7 @@ mod tests {
         DataSet {
             source: PathBuf::from(name),
             label: None,
+            kind: DataSetKind::Source,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![
@@ -603,6 +643,8 @@ mod tests {
         assert!(csv.contains("# Name: sample · 拟合 1"));
         let imported = read_data_file(&directory.join("combined.csv")).unwrap();
         assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].kind, DataSetKind::Source);
+        assert_eq!(imported[1].kind, DataSetKind::Fit);
         assert_eq!(imported[0].columns[0].values, [1.0, 3.0]);
         assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         std::fs::remove_dir_all(directory).unwrap();
@@ -627,6 +669,8 @@ mod tests {
             .unwrap();
             let imported = read_data_file(&path).unwrap();
             assert_eq!(imported.len(), 2, "failed for {extension}");
+            assert_eq!(imported[0].kind, DataSetKind::Source);
+            assert_eq!(imported[1].kind, DataSetKind::Fit);
             assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         }
         std::fs::remove_dir_all(directory).unwrap();
@@ -689,7 +733,39 @@ mod tests {
             assert!(imported[0].display_name().contains("first.csv"));
             assert!(imported[1].display_name().contains("second.csv"));
             assert!(imported[2].display_name().contains("final fit"));
+            assert_eq!(imported[0].kind, DataSetKind::Source);
+            assert_eq!(imported[1].kind, DataSetKind::Source);
+            assert_eq!(imported[2].kind, DataSetKind::Fit);
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn imported_fit_datasets_remain_typed_and_sort_after_sources() {
+        let directory = temporary_directory("typed-dataset-order");
+        let text_path = directory.join("typed.csv");
+        let workbook_path = directory.join("typed.xlsx");
+        let mut imported_fit = dataset("older fit.csv");
+        imported_fit.kind = DataSetKind::Fit;
+        let source = dataset("source.csv");
+        let datasets = [imported_fit, source];
+
+        save_all_text_combined(&text_path, &datasets, TextExportFormat::Csv, &[]).unwrap();
+        let text_imported = read_data_file(&text_path).unwrap();
+        assert_eq!(text_imported.len(), 2);
+        assert!(text_imported[0].display_name().contains("source.csv"));
+        assert!(text_imported[1].display_name().contains("older fit.csv"));
+        assert_eq!(text_imported[0].kind, DataSetKind::Source);
+        assert_eq!(text_imported[1].kind, DataSetKind::Fit);
+
+        save_workbook(&workbook_path, &datasets).unwrap();
+        let workbook_imported = read_data_file(&workbook_path).unwrap();
+        assert_eq!(workbook_imported.len(), 2);
+        assert!(workbook_imported[0].display_name().contains("source"));
+        assert!(workbook_imported[1].display_name().contains("older fit"));
+        assert_eq!(workbook_imported[0].kind, DataSetKind::Source);
+        assert_eq!(workbook_imported[1].kind, DataSetKind::Fit);
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -711,6 +787,8 @@ mod tests {
 
         let imported = read_data_file(&path).unwrap();
         assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].kind, DataSetKind::Source);
+        assert_eq!(imported[1].kind, DataSetKind::Fit);
         assert!(imported[0].display_name().contains("sample"));
         assert!(imported[1].display_name().contains("sample fitted"));
         assert_eq!(imported[1].columns[0].values, [0.0, 1.0]);
