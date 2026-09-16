@@ -2108,7 +2108,6 @@ fn preferred_import_columns(
         .unwrap_or(0);
     let y_column = previous
         .and_then(|(_, y_name)| column_names.iter().position(|name| name == y_name))
-        .filter(|index| *index != x_column)
         .unwrap_or_else(|| {
             if default_y != x_column {
                 default_y
@@ -2418,6 +2417,18 @@ mod tests {
         assert_eq!(
             preferred_import_columns(&columns, Some(&("field".to_owned(), "signal".to_owned())),),
             (2, 0)
+        );
+    }
+
+    #[test]
+    fn imported_dataset_preserves_a_same_column_x_y_choice() {
+        let columns = ["signal", "field"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            preferred_import_columns(&columns, Some(&("field".to_owned(), "field".to_owned())),),
+            (1, 1)
         );
     }
 }
