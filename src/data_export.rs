@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::Workbook;
@@ -55,6 +57,7 @@ pub fn save_retained_rows_selected_with_fits(
     fits: &[FitCurveExport<'_>],
 ) -> Result<usize, String> {
     validate_column_selection(dataset, columns)?;
+    validate_fit_compatible_selection(columns, fits)?;
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -83,6 +86,7 @@ pub fn save_workbook_selected_with_fits(
     fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
     validate_column_selection(dataset, columns)?;
+    validate_fit_compatible_selection(columns, fits)?;
     save_workbook_with_columns(path, std::slice::from_ref(dataset), Some(columns), fits)
 }
 
@@ -118,6 +122,42 @@ pub fn save_all_text_with_fits(
         std::fs::write(&path, bytes).map_err(|error| format!("{}：{error}", path.display()))?;
         row_count += retained_row_count(dataset);
     }
+    Ok(ExportSummary {
+        dataset_count: datasets.len(),
+        row_count,
+    })
+}
+
+pub fn save_all_text_combined(
+    path: &Path,
+    datasets: &[DataSet],
+    format: TextExportFormat,
+    fits: &[FitCurveExport<'_>],
+) -> Result<ExportSummary, String> {
+    if datasets.is_empty() {
+        return Err("没有可导出的数据集".to_owned());
+    }
+    let file = File::create(path).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+    let mut row_count = 0_usize;
+    let mut needs_separator = false;
+    for dataset in datasets {
+        if needs_separator {
+            writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        }
+        let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
+        write_source_section(&mut writer, dataset, &columns, format.delimiter())?;
+        row_count += retained_row_count(dataset);
+        needs_separator = true;
+    }
+    for fit in fits {
+        if needs_separator {
+            writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        }
+        write_fit_section(&mut writer, fit, format.delimiter())?;
+        needs_separator = true;
+    }
+    writer.flush().map_err(|error| error.to_string())?;
     Ok(ExportSummary {
         dataset_count: datasets.len(),
         row_count,
@@ -240,39 +280,76 @@ fn encode_sectioned_text(
     if fits.is_empty() {
         return encode_retained_rows_selected(dataset, columns, delimiter);
     }
-    const BEGIN: &str = "# -----BEGIN INSTPLOT DATA-----\n";
-    const END: &str = "# -----END INSTPLOT DATA-----\n";
+    validate_fit_compatible_selection(columns, fits)?;
     let mut output = Vec::new();
-    output.extend_from_slice(BEGIN.as_bytes());
-    output.extend_from_slice(
-        format!("# Name: {}\n", metadata_text(&dataset.display_name())).as_bytes(),
-    );
-    output.extend_from_slice(b"# Type: source\n\n");
-    output.extend_from_slice(&encode_retained_rows_selected(dataset, columns, delimiter)?);
-    output.extend_from_slice(b"\n");
-    output.extend_from_slice(END.as_bytes());
-
+    write_source_section(&mut output, dataset, columns, delimiter)?;
     for fit in fits {
-        output.extend_from_slice(b"\n");
-        output.extend_from_slice(BEGIN.as_bytes());
-        output.extend_from_slice(format!("# Name: {}\n", metadata_text(fit.name)).as_bytes());
-        output.extend_from_slice(b"# Type: fit\n\n");
-        let mut writer = csv::WriterBuilder::new()
-            .delimiter(delimiter)
-            .from_writer(Vec::new());
-        writer
-            .write_record(["X", "拟合 Y", "R²"])
-            .map_err(|error| error.to_string())?;
-        for [x, y] in fit.points {
-            writer
-                .write_record([x.to_string(), y.to_string(), fit.r_squared.to_string()])
-                .map_err(|error| error.to_string())?;
-        }
-        output.extend_from_slice(&writer.into_inner().map_err(|error| error.to_string())?);
-        output.extend_from_slice(b"\n");
-        output.extend_from_slice(END.as_bytes());
+        output.write_all(b"\n").map_err(|error| error.to_string())?;
+        write_fit_section(&mut output, fit, delimiter)?;
     }
     Ok(output)
+}
+
+fn write_source_section(
+    output: &mut impl Write,
+    dataset: &DataSet,
+    columns: &[usize],
+    delimiter: u8,
+) -> Result<(), String> {
+    const BEGIN: &str = "# -----BEGIN INSTPLOT DATA-----\n";
+    const END: &str = "# -----END INSTPLOT DATA-----\n";
+    output
+        .write_all(BEGIN.as_bytes())
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(format!("# Name: {}\n", metadata_text(&dataset.display_name())).as_bytes())
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(b"# Type: source\n\n")
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(&encode_retained_rows_selected(dataset, columns, delimiter)?)
+        .map_err(|error| error.to_string())?;
+    output.write_all(b"\n").map_err(|error| error.to_string())?;
+    output
+        .write_all(END.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+fn write_fit_section(
+    output: &mut impl Write,
+    fit: &FitCurveExport<'_>,
+    delimiter: u8,
+) -> Result<(), String> {
+    const BEGIN: &str = "# -----BEGIN INSTPLOT DATA-----\n";
+    const END: &str = "# -----END INSTPLOT DATA-----\n";
+    output
+        .write_all(BEGIN.as_bytes())
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(format!("# Name: {}\n", metadata_text(fit.name)).as_bytes())
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(b"# Type: fit\n\n")
+        .map_err(|error| error.to_string())?;
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(Vec::new());
+    writer
+        .write_record(["X", "拟合 Y", "R²"])
+        .map_err(|error| error.to_string())?;
+    for [x, y] in fit.points {
+        writer
+            .write_record([x.to_string(), y.to_string(), fit.r_squared.to_string()])
+            .map_err(|error| error.to_string())?;
+    }
+    output
+        .write_all(&writer.into_inner().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    output.write_all(b"\n").map_err(|error| error.to_string())?;
+    output
+        .write_all(END.as_bytes())
+        .map_err(|error| error.to_string())
 }
 
 fn metadata_text(value: &str) -> String {
@@ -330,6 +407,16 @@ fn validate_column_selection(dataset: &DataSet, columns: &[usize]) -> Result<(),
         if !seen.insert(column) {
             return Err("所选列重复".to_owned());
         }
+    }
+    Ok(())
+}
+
+fn validate_fit_compatible_selection(
+    columns: &[usize],
+    fits: &[FitCurveExport<'_>],
+) -> Result<(), String> {
+    if !fits.is_empty() && columns.len() < 2 {
+        return Err("包含拟合结果时，请至少选择两列原始数据，以便文件能够重新导入".to_owned());
     }
     Ok(())
 }
@@ -440,8 +527,8 @@ fn unique_sheet_name(value: &str, used: &mut HashSet<String>) -> String {
 mod tests {
     use super::{
         FitCurveExport, TextExportFormat, encode_retained_rows, encode_retained_rows_selected,
-        save_all_text, save_retained_rows_selected_with_fits, save_workbook,
-        save_workbook_with_fits,
+        save_all_text, save_all_text_combined, save_retained_rows_selected_with_fits,
+        save_workbook, save_workbook_with_fits,
     };
     use crate::data::{DataSet, NumericColumn, read_data_file};
     use std::path::PathBuf;
@@ -541,6 +628,67 @@ mod tests {
             let imported = read_data_file(&path).unwrap();
             assert_eq!(imported.len(), 2, "failed for {extension}");
             assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fit_export_rejects_a_single_source_column() {
+        let directory = temporary_directory("single-column-fit");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        for extension in ["csv", "xlsx"] {
+            let path = directory.join(format!("single.{extension}"));
+            let error = save_retained_rows_selected_with_fits(
+                &path,
+                &dataset("sample.csv"),
+                &[0],
+                &[FitCurveExport {
+                    name: "sample fitted",
+                    points: &points,
+                    r_squared: 0.98,
+                }],
+            )
+            .unwrap_err();
+            assert!(error.contains("至少选择两列"));
+            assert!(!path.exists());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn combined_text_export_writes_all_sources_before_fits_and_round_trips() {
+        let directory = temporary_directory("combined-all");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        for (extension, format) in [
+            ("csv", TextExportFormat::Csv),
+            ("tsv", TextExportFormat::Tsv),
+            ("txt", TextExportFormat::Txt),
+            ("dat", TextExportFormat::Dat),
+        ] {
+            let path = directory.join(format!("all.{extension}"));
+            let summary = save_all_text_combined(
+                &path,
+                &[dataset("first.csv"), dataset("second.csv")],
+                format,
+                &[FitCurveExport {
+                    name: "final fit",
+                    points: &points,
+                    r_squared: 0.98,
+                }],
+            )
+            .unwrap();
+            assert_eq!(summary.dataset_count, 2);
+            assert_eq!(summary.row_count, 4);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let first = text.find("# Name: first.csv").unwrap();
+            let second = text.find("# Name: second.csv").unwrap();
+            let fit = text.find("# Name: final fit").unwrap();
+            assert!(first < second && second < fit);
+            let imported = read_data_file(&path).unwrap();
+            assert_eq!(imported.len(), 3, "failed for {extension}");
+            assert!(imported[0].display_name().contains("first.csv"));
+            assert!(imported[1].display_name().contains("second.csv"));
+            assert!(imported[2].display_name().contains("final fit"));
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

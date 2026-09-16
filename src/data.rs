@@ -456,7 +456,11 @@ fn parse_text_datasets(
     text: &str,
     encoding: String,
 ) -> Result<Vec<DataSet>, ImportError> {
-    if !text.lines().any(|line| line.trim() == SECTION_BEGIN) {
+    let has_boundary = text.lines().any(|line| {
+        let line = line.trim();
+        line == SECTION_BEGIN || line == SECTION_END
+    });
+    if !has_boundary {
         return parse_text(path, text, encoding).map(|dataset| vec![dataset]);
     }
 
@@ -513,6 +517,12 @@ fn parse_text_datasets(
             } else {
                 section_lines.push(line);
             }
+        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            return Err(ImportError::at_line(
+                "data_outside_section",
+                line_index + 1,
+                "InstPlot 分区文件中的数据必须位于 BEGIN 和 END 标记之间",
+            ));
         }
     }
 
@@ -820,6 +830,44 @@ mod tests {
         .unwrap();
         let error = read_data_file(&path).unwrap_err();
         assert_eq!(error.code, "unterminated_section");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sectioned_file_rejects_data_outside_boundaries() {
+        let path = temporary_path("outside-sections.csv");
+        std::fs::write(
+            &path,
+            b"outside_x,outside_y\n100,200\n# -----BEGIN INSTPLOT DATA-----\nx,y\n1,2\n# -----END INSTPLOT DATA-----\n",
+        )
+        .unwrap();
+        let error = read_data_file(&path).unwrap_err();
+        assert_eq!(error.code, "data_outside_section");
+        assert_eq!(error.line_number, Some(1));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn orphan_section_end_is_rejected() {
+        let path = temporary_path("orphan-end.csv");
+        std::fs::write(&path, b"# comment\n# -----END INSTPLOT DATA-----\n").unwrap();
+        let error = read_data_file(&path).unwrap_err();
+        assert_eq!(error.code, "unexpected_section_end");
+        assert_eq!(error.line_number, Some(2));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn comments_and_blank_lines_are_allowed_outside_sections() {
+        let path = temporary_path("section-comments.tsv");
+        std::fs::write(
+            &path,
+            b"# generated file\n\n# -----BEGIN INSTPLOT DATA-----\nx\ty\n1\t2\n# -----END INSTPLOT DATA-----\n\n# trailing comment\n",
+        )
+        .unwrap();
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].columns[1].values, [2.0]);
         std::fs::remove_file(path).unwrap();
     }
 

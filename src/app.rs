@@ -372,6 +372,11 @@ impl InstPlotLiteApp {
             .unwrap_or_default();
         let mut open = true;
         let mut export = false;
+        let minimum_selected = if self.fit_exports_for_dataset(self.active_dataset).is_empty() {
+            1
+        } else {
+            2
+        };
         egui::Window::new("选择导出列")
             .open(&mut open)
             .collapsible(false)
@@ -416,7 +421,15 @@ impl InstPlotLiteApp {
                             ui.horizontal(|ui| {
                                 ui.label(format!("已选 {selected_count} 列"));
                                 if ui
-                                    .add_enabled(selected_count > 0, egui::Button::new("导出"))
+                                    .add_enabled(
+                                        selected_count >= minimum_selected,
+                                        egui::Button::new("导出"),
+                                    )
+                                    .on_disabled_hover_text(if minimum_selected == 2 {
+                                        "包含拟合结果时至少选择两列，确保导出的文件能够重新导入"
+                                    } else {
+                                        "请至少选择一列"
+                                    })
                                     .clicked()
                                 {
                                     export = true;
@@ -440,7 +453,7 @@ impl InstPlotLiteApp {
         }
     }
 
-    fn export_all_text(&mut self, format: data_export::TextExportFormat) {
+    fn export_all_text_separate(&mut self, format: data_export::TextExportFormat) {
         if self.datasets.is_empty() {
             self.status = "请先导入数据".to_owned();
             return;
@@ -462,6 +475,40 @@ impl InstPlotLiteApp {
                 )
             }
             Err(error) => self.status = format!("批量数据导出失败：{error}"),
+        }
+    }
+
+    fn export_all_text_combined(&mut self, format: data_export::TextExportFormat) {
+        if self.datasets.is_empty() {
+            self.status = "请先导入数据".to_owned();
+            return;
+        }
+        let extension = format.extension();
+        let filter_name = match format {
+            data_export::TextExportFormat::Csv => "CSV 数据",
+            data_export::TextExportFormat::Tsv => "TSV 数据",
+            data_export::TextExportFormat::Txt => "TXT 数据",
+            data_export::TextExportFormat::Dat => "DAT 数据",
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(filter_name, &[extension])
+            .set_file_name(format!("instplot-all-data.{extension}"))
+            .save_file()
+        else {
+            return;
+        };
+        let fits = self.all_fit_exports();
+        let fit_count = fits.len();
+        match data_export::save_all_text_combined(&path, &self.datasets, format, &fits) {
+            Ok(summary) => {
+                self.status = format!(
+                    "已导出一个分区文件：{} 个数据集、{} 行及 {fit_count} 个拟合数据区：{}",
+                    summary.dataset_count,
+                    summary.row_count,
+                    path.display()
+                )
+            }
+            Err(error) => self.status = format!("合并数据导出失败：{error}"),
         }
     }
 
@@ -1836,21 +1883,39 @@ impl eframe::App for InstPlotLiteApp {
                         ui.close();
                         self.export_all_xlsx();
                     }
+                    if ui.button("一个 CSV 分区文件（推荐）").clicked() {
+                        ui.close();
+                        self.export_all_text_combined(data_export::TextExportFormat::Csv);
+                    }
+                    if ui.button("一个 TSV 分区文件").clicked() {
+                        ui.close();
+                        self.export_all_text_combined(data_export::TextExportFormat::Tsv);
+                    }
+                    if ui.button("一个 TXT 分区文件").clicked() {
+                        ui.close();
+                        self.export_all_text_combined(data_export::TextExportFormat::Txt);
+                    }
+                    if ui.button("一个 DAT 分区文件").clicked() {
+                        ui.close();
+                        self.export_all_text_combined(data_export::TextExportFormat::Dat);
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("多个独立文件").strong());
                     if ui.button("多个 CSV 文件").clicked() {
                         ui.close();
-                        self.export_all_text(data_export::TextExportFormat::Csv);
+                        self.export_all_text_separate(data_export::TextExportFormat::Csv);
                     }
                     if ui.button("多个 TSV 文件").clicked() {
                         ui.close();
-                        self.export_all_text(data_export::TextExportFormat::Tsv);
+                        self.export_all_text_separate(data_export::TextExportFormat::Tsv);
                     }
                     if ui.button("多个 TXT 文件").clicked() {
                         ui.close();
-                        self.export_all_text(data_export::TextExportFormat::Txt);
+                        self.export_all_text_separate(data_export::TextExportFormat::Txt);
                     }
                     if ui.button("多个 DAT 文件").clicked() {
                         ui.close();
-                        self.export_all_text(data_export::TextExportFormat::Dat);
+                        self.export_all_text_separate(data_export::TextExportFormat::Dat);
                     }
                 });
             });
