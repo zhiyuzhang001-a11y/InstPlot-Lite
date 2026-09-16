@@ -456,4 +456,31 @@ mod tests {
         assert_eq!(history.redo(&mut datasets), Some(HistoryEffect::Columns(1)));
         assert_eq!(datasets[0].columns[1].values, [-1.0, 0.0, 1.0]);
     }
+
+    #[test]
+    fn consecutive_processing_operations_undo_one_step_at_a_time() {
+        let mut datasets = vec![dataset()];
+        let mut history = EditHistory::default();
+
+        let center = ProcessingOperation::Center;
+        let centered = crate::processing::apply_to_dataset(&datasets[0], 1, &center).unwrap();
+        let original = std::mem::replace(&mut datasets[0].columns[1].values, centered.values);
+        history.record_replace_columns(vec![(0, 1, original, 1, center)]);
+
+        let offset = ProcessingOperation::Formula {
+            x_column: 0,
+            expression: "y + b".to_owned(),
+            a: 1.0,
+            b: 10.0,
+        };
+        let shifted = crate::processing::apply_to_dataset(&datasets[0], 1, &offset).unwrap();
+        let centered_values = std::mem::replace(&mut datasets[0].columns[1].values, shifted.values);
+        history.record_replace_columns(vec![(0, 1, centered_values, 1, offset)]);
+
+        assert_eq!(datasets[0].columns[1].values, [9.0, 10.0, 11.0]);
+        assert_eq!(history.undo(&mut datasets), Some(HistoryEffect::Columns(1)));
+        assert_eq!(datasets[0].columns[1].values, [-1.0, 0.0, 1.0]);
+        assert_eq!(history.undo(&mut datasets), Some(HistoryEffect::Columns(1)));
+        assert_eq!(datasets[0].columns[1].values, [0.0, 1.0, 2.0]);
+    }
 }

@@ -270,6 +270,9 @@ pub fn formula_output_axis(source: &str) -> Result<FormulaAxis, FitError> {
     if normalized.is_empty() {
         return Err(FitError::new("invalid_expression", "公式不能为空"));
     }
+    if let Some(hint) = expression_syntax_hint(&normalized) {
+        return Err(FitError::new("invalid_expression", hint));
+    }
     validate_expression_identifiers(&normalized, &["x", "y", "a", "b"])?;
     let characters: Vec<char> = normalized.chars().collect();
     let mut index = 0;
@@ -328,7 +331,10 @@ pub fn evaluate_constant_expression(source: &str) -> Result<f64, FitError> {
     let expression = Parser::new()
         .parse(&normalized, &mut slab.ps)
         .map_err(|error| {
-            FitError::new("invalid_expression", format!("无法解析数值表达式：{error}"))
+            FitError::new(
+                "invalid_expression",
+                friendly_parse_error("无法解析数值表达式", &normalized, error),
+            )
         })?;
     let mut namespace = |name: &str, arguments: Vec<f64>| -> Option<f64> {
         match name {
@@ -604,7 +610,10 @@ impl CustomExpression {
         validate_expression_identifiers(source, &variables)?;
         let mut slab = Slab::new();
         let expression = Parser::new().parse(source, &mut slab.ps).map_err(|error| {
-            FitError::new("invalid_expression", format!("无法解析表达式：{error}"))
+            FitError::new(
+                "invalid_expression",
+                friendly_parse_error("无法解析表达式", source, error),
+            )
         })?;
         let parsed = Self { slab, expression };
         parsed
@@ -653,7 +662,10 @@ impl FormulaExpression {
         validate_expression_identifiers(source, &["x", "y", "a", "b"])?;
         let mut slab = Slab::new();
         let expression = Parser::new().parse(source, &mut slab.ps).map_err(|error| {
-            FitError::new("invalid_expression", format!("无法解析公式：{error}"))
+            FitError::new(
+                "invalid_expression",
+                friendly_parse_error("无法解析公式", source, error),
+            )
         })?;
         Ok(Self { slab, expression })
     }
@@ -721,6 +733,173 @@ fn validate_expression_identifiers(source: &str, variables: &[&str]) -> Result<(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SyntaxTokenKind {
+    Number,
+    Identifier(String),
+    LeftParen,
+    RightParen,
+    Operator(char),
+    Comma,
+}
+
+#[derive(Clone, Debug)]
+struct SyntaxToken {
+    kind: SyntaxTokenKind,
+    position: usize,
+}
+
+fn friendly_parse_error(context: &str, source: &str, error: impl fmt::Display) -> String {
+    expression_syntax_hint(source)
+        .map(|hint| format!("{context}：{hint}"))
+        .unwrap_or_else(|| format!("{context}：{error}"))
+}
+
+fn expression_syntax_hint(source: &str) -> Option<String> {
+    const FUNCTIONS: [&str; 13] = [
+        "sin", "cos", "tan", "sinh", "cosh", "tanh", "exp", "ln", "lg", "sqrt", "abs", "arctan",
+        "arctan2",
+    ];
+    let characters = source.char_indices().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    let mut index = 0_usize;
+    let mut parentheses = Vec::new();
+    while index < characters.len() {
+        let (byte_position, character) = characters[index];
+        if character.is_whitespace() {
+            index += 1;
+            continue;
+        }
+        let position = source[..byte_position].chars().count() + 1;
+        if character == '(' {
+            parentheses.push(position);
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::LeftParen,
+                position,
+            });
+            index += 1;
+            continue;
+        }
+        if character == ')' {
+            if parentheses.pop().is_none() {
+                return Some(format!("第 {position} 个字符的 ) 没有对应的 ("));
+            }
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::RightParen,
+                position,
+            });
+            index += 1;
+            continue;
+        }
+        if matches!(character, '+' | '-' | '*' | '/' | '^') {
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::Operator(character),
+                position,
+            });
+            index += 1;
+            continue;
+        }
+        if character == ',' {
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::Comma,
+                position,
+            });
+            index += 1;
+            continue;
+        }
+        if character.is_ascii_digit()
+            || (character == '.'
+                && characters
+                    .get(index + 1)
+                    .is_some_and(|(_, next)| next.is_ascii_digit()))
+        {
+            index += 1;
+            while index < characters.len() && characters[index].1.is_ascii_digit() {
+                index += 1;
+            }
+            if index < characters.len() && characters[index].1 == '.' {
+                index += 1;
+                while index < characters.len() && characters[index].1.is_ascii_digit() {
+                    index += 1;
+                }
+            }
+            if index < characters.len() && matches!(characters[index].1, 'e' | 'E') {
+                let exponent = index;
+                index += 1;
+                if index < characters.len() && matches!(characters[index].1, '+' | '-') {
+                    index += 1;
+                }
+                let digits = index;
+                while index < characters.len() && characters[index].1.is_ascii_digit() {
+                    index += 1;
+                }
+                if index == digits {
+                    index = exponent;
+                }
+            }
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::Number,
+                position,
+            });
+            continue;
+        }
+        if character.is_ascii_alphabetic() || character == '_' {
+            let start = index;
+            index += 1;
+            while index < characters.len()
+                && (characters[index].1.is_ascii_alphanumeric() || characters[index].1 == '_')
+            {
+                index += 1;
+            }
+            let start_byte = characters[start].0;
+            let end_byte = characters
+                .get(index)
+                .map_or(source.len(), |(byte_position, _)| *byte_position);
+            tokens.push(SyntaxToken {
+                kind: SyntaxTokenKind::Identifier(source[start_byte..end_byte].to_owned()),
+                position,
+            });
+            continue;
+        }
+        return Some(format!("第 {position} 个字符“{character}”不受支持"));
+    }
+    if let Some(position) = parentheses.last() {
+        return Some(format!("第 {position} 个字符的 ( 缺少对应的 )"));
+    }
+    for (token_index, token) in tokens.iter().enumerate() {
+        let next = tokens.get(token_index + 1);
+        if let SyntaxTokenKind::Identifier(name) = &token.kind
+            && FUNCTIONS.contains(&name.as_str())
+            && !next.is_some_and(|next| next.kind == SyntaxTokenKind::LeftParen)
+        {
+            return Some(format!("函数 {name} 后缺少 (，例如 {name}(x)"));
+        }
+        let Some(next) = next else {
+            if let SyntaxTokenKind::Operator(operator) = token.kind {
+                return Some(format!("公式不能以运算符 {operator} 结尾"));
+            }
+            continue;
+        };
+        let left_is_value = matches!(
+            token.kind,
+            SyntaxTokenKind::Number | SyntaxTokenKind::Identifier(_) | SyntaxTokenKind::RightParen
+        );
+        let right_is_value = matches!(
+            next.kind,
+            SyntaxTokenKind::Number | SyntaxTokenKind::Identifier(_) | SyntaxTokenKind::LeftParen
+        );
+        let function_call = matches!(&token.kind, SyntaxTokenKind::Identifier(name) if FUNCTIONS.contains(&name.as_str()))
+            && next.kind == SyntaxTokenKind::LeftParen;
+        if left_is_value && right_is_value && !function_call {
+            return Some(format!(
+                "第 {} 个字符附近缺少乘号 *，例如写成 … * …",
+                next.position
+            ));
+        }
+    }
+    None
 }
 
 fn polynomial_equation(coefficients: &[f64]) -> String {
@@ -887,6 +1066,52 @@ mod tests {
             1e-12,
         );
         assert!(evaluate_constant_expression("1 / 0").is_err());
+    }
+
+    #[test]
+    fn syntax_errors_explain_common_missing_characters() {
+        let missing_multiply = formula_output_axis("2x + 1").unwrap_err();
+        assert!(missing_multiply.reason.contains("缺少乘号 *"));
+
+        let missing_function_parenthesis = formula_output_axis("sin x").unwrap_err();
+        assert!(
+            missing_function_parenthesis
+                .reason
+                .contains("函数 sin 后缺少 (")
+        );
+
+        let missing_closing_parenthesis = formula_output_axis("sin(x").unwrap_err();
+        assert!(missing_closing_parenthesis.reason.contains("缺少对应的 )"));
+
+        let extra_closing_parenthesis = formula_output_axis("x + 1)").unwrap_err();
+        assert!(extra_closing_parenthesis.reason.contains("没有对应的 ("));
+    }
+
+    #[test]
+    fn syntax_hints_do_not_reject_valid_functions_or_scientific_notation() {
+        assert_eq!(
+            formula_output_axis("1e-3 * sin(x)").unwrap(),
+            FormulaAxis::X
+        );
+        assert_close(
+            evaluate_constant_expression("1e-3 + sin(pi / 2)").unwrap(),
+            1.001,
+            1e-12,
+        );
+    }
+
+    #[test]
+    fn custom_fit_reports_a_missing_multiplication_sign() {
+        let error = fit_values(
+            &[0.0, 1.0, 2.0],
+            &[0.0, 1.0, 2.0],
+            &FitMethod::Custom {
+                expression: "a x".to_owned(),
+                initial_parameters: vec![1.0],
+            },
+        )
+        .unwrap_err();
+        assert!(error.reason.contains("缺少乘号 *"));
     }
 
     #[test]

@@ -136,6 +136,14 @@ struct FitOverlay {
     points: Vec<[f64; 2]>,
     r2: f64,
     name: String,
+    target: FitTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FitTarget {
+    dataset_index: Option<usize>,
+    x_column_name: String,
+    y_column_name: String,
 }
 
 impl Default for ProcessingSettings {
@@ -575,7 +583,6 @@ impl InstPlotLiteApp {
         let changed = dataset.delete_rows(&pending.rows);
         let count = changed.len();
         self.history.record_delete(pending.dataset_index, changed);
-        self.fit_overlays.clear();
         self.status = format!("已删除 {count} 个点；可使用撤销恢复");
     }
 
@@ -790,7 +797,6 @@ impl InstPlotLiteApp {
         } else {
             self.history.record_add_columns(added_columns);
         }
-        self.fit_overlays.clear();
         if let Some(column_index) = active_result_column {
             if formula_targets_x {
                 self.x_column = column_index;
@@ -1119,13 +1125,23 @@ impl InstPlotLiteApp {
                         .on_hover_text("根据公式中的 x 或 y，按上方结果写入方式应用公式")
                         .clicked()
                     {
-                        let parameters = (
-                            fitting::evaluate_constant_expression(&self.processing_settings.formula_a),
-                            fitting::evaluate_constant_expression(&self.processing_settings.formula_b),
-                        );
-                        let (Ok(a), Ok(b)) = parameters else {
-                            self.status = "公式系数无效：请输入有限数值或常量表达式，例如 10/11".to_owned();
-                            return;
+                        let a = match fitting::evaluate_constant_expression(
+                            &self.processing_settings.formula_a,
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                self.status = format!("公式系数 a 无效：{}", error.reason);
+                                return;
+                            }
+                        };
+                        let b = match fitting::evaluate_constant_expression(
+                            &self.processing_settings.formula_b,
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                self.status = format!("公式系数 b 无效：{}", error.reason);
+                                return;
+                            }
                         };
                         requested = Some((
                             ProcessingOperation::Formula {
@@ -1256,6 +1272,31 @@ impl InstPlotLiteApp {
     }
 
     fn execute_fit(&mut self) {
+        let Some(active) = self.datasets.get(self.active_dataset) else {
+            self.fit_settings.message = "拟合失败：请先导入数据".to_owned();
+            return;
+        };
+        let Some(x_column_name) = active
+            .columns
+            .get(self.x_column)
+            .map(|column| column.name.clone())
+        else {
+            self.fit_settings.message = "拟合失败：当前 X 列不存在".to_owned();
+            return;
+        };
+        let Some(y_column_name) = active
+            .columns
+            .get(self.y_column)
+            .map(|column| column.name.clone())
+        else {
+            self.fit_settings.message = "拟合失败：当前 Y 列不存在".to_owned();
+            return;
+        };
+        let target = FitTarget {
+            dataset_index: (!self.fit_settings.merge_datasets).then_some(self.active_dataset),
+            x_column_name: x_column_name.clone(),
+            y_column_name: y_column_name.clone(),
+        };
         let (x, y) = match self.collect_fit_values() {
             Ok(values) => values,
             Err(error) => {
@@ -1276,13 +1317,22 @@ impl InstPlotLiteApp {
                     .initial_parameters
                     .split(',')
                     .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(fitting::evaluate_constant_expression)
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if value.is_empty() {
+                            return Err(format!("第 {} 个初始参数为空", index + 1));
+                        }
+                        fitting::evaluate_constant_expression(value).map_err(|error| {
+                            format!("第 {} 个初始参数：{}", index + 1, error.reason)
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>();
-                let Ok(parameters) = parameters else {
-                    self.fit_settings.message =
-                        "拟合失败：初始参数应为逗号分隔的有限数值或表达式，例如 10/11".to_owned();
-                    return;
+                let parameters = match parameters {
+                    Ok(parameters) => parameters,
+                    Err(error) => {
+                        self.fit_settings.message = format!("拟合失败：{error}");
+                        return;
+                    }
                 };
                 FitMethod::Custom {
                     expression: self.fit_settings.expression.clone(),
@@ -1305,15 +1355,25 @@ impl InstPlotLiteApp {
                     .get(self.active_dataset)
                     .map(data::DataSet::display_name)
                     .unwrap_or_else(|| "未命名数据".to_owned());
-                let fit_number = self.fit_overlays.len() + 1;
-                self.fit_overlays.push(FitOverlay {
+                let fit_name = format!(
+                    "{source_name} · {x_column_name}/{y_column_name} 拟合 · R²={:.4}",
+                    result.r2
+                );
+                let overlay = FitOverlay {
                     points: result.points,
                     r2: result.r2,
-                    name: format!("{source_name} · 拟合 {fit_number} · R²={:.4}", result.r2),
-                });
+                    name: fit_name,
+                    target,
+                };
+                let updated = store_fit_overlay(&mut self.fit_overlays, overlay);
                 self.status = format!(
-                    "拟合完成：R² = {:.6}，使用 {point_count} 个点；当前保留 {} 条拟合曲线",
+                    "拟合完成：R² = {:.6}，使用 {point_count} 个点；{}，当前保留 {} 条拟合曲线",
                     result.r2,
+                    if updated {
+                        "已更新当前曲线"
+                    } else {
+                        "已添加当前曲线"
+                    },
                     self.fit_overlays.len()
                 );
             }
@@ -1352,6 +1412,9 @@ impl InstPlotLiteApp {
                             ui.spacing_mut().item_spacing.y = 10.0;
                             ui.label("使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。");
                             ui.separator();
+                            ui.small(
+                                "同一数据集的同一组 X/Y 重新拟合时，会更新原拟合曲线；其他曲线的拟合结果会保留。",
+                            );
                             ui.horizontal(|ui| {
                                 ui.label("数据源");
                                 egui::ComboBox::from_id_salt("fit-source")
@@ -1664,7 +1727,6 @@ impl InstPlotLiteApp {
 
     fn undo(&mut self) {
         if let Some(effect) = self.history.undo(&mut self.datasets) {
-            self.fit_overlays.clear();
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已撤销，恢复 {count} 个点"),
@@ -1676,7 +1738,6 @@ impl InstPlotLiteApp {
 
     fn redo(&mut self) {
         if let Some(effect) = self.history.redo(&mut self.datasets) {
-            self.fit_overlays.clear();
             self.clamp_columns();
             self.status = match effect {
                 HistoryEffect::Rows(count) => format!("已重做，删除 {count} 个点"),
@@ -2375,10 +2436,24 @@ fn fit_color(index: usize) -> Color32 {
     COLORS[index % COLORS.len()]
 }
 
+fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> bool {
+    if let Some(existing) = overlays
+        .iter_mut()
+        .find(|existing| existing.target == overlay.target)
+    {
+        *existing = overlay;
+        true
+    } else {
+        overlays.push(overlay);
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        configure_interface_style, demo_curve, preferred_import_columns, wheel_zoom_factor,
+        FitOverlay, FitTarget, configure_interface_style, demo_curve, preferred_import_columns,
+        store_fit_overlay, wheel_zoom_factor,
     };
     use eframe::egui;
 
@@ -2430,5 +2505,45 @@ mod tests {
             preferred_import_columns(&columns, Some(&("field".to_owned(), "field".to_owned())),),
             (1, 1)
         );
+    }
+
+    #[test]
+    fn refitting_the_same_curve_replaces_only_its_previous_fit() {
+        let target = FitTarget {
+            dataset_index: Some(0),
+            x_column_name: "x".to_owned(),
+            y_column_name: "y".to_owned(),
+        };
+        let other_target = FitTarget {
+            dataset_index: Some(1),
+            x_column_name: "x".to_owned(),
+            y_column_name: "y".to_owned(),
+        };
+        let mut overlays = vec![
+            FitOverlay {
+                points: vec![[0.0, 1.0]],
+                r2: 0.5,
+                name: "old".to_owned(),
+                target: target.clone(),
+            },
+            FitOverlay {
+                points: vec![[0.0, 2.0]],
+                r2: 0.9,
+                name: "other".to_owned(),
+                target: other_target,
+            },
+        ];
+        assert!(store_fit_overlay(
+            &mut overlays,
+            FitOverlay {
+                points: vec![[0.0, 3.0]],
+                r2: 0.99,
+                name: "new".to_owned(),
+                target,
+            }
+        ));
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].name, "new");
+        assert_eq!(overlays[1].name, "other");
     }
 }
