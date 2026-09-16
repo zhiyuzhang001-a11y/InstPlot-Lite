@@ -331,6 +331,7 @@ impl InstPlotLiteApp {
             "xlsx" => ("Excel 工作簿", &["xlsx"]),
             "tsv" => ("TSV 数据", &["tsv"]),
             "txt" => ("TXT 数据", &["txt"]),
+            "dat" => ("DAT 数据", &["dat"]),
             _ => ("CSV 数据", &["csv"]),
         };
         let Some(path) = rfd::FileDialog::new()
@@ -340,48 +341,17 @@ impl InstPlotLiteApp {
         else {
             return;
         };
-        match data_export::save_retained_rows_selected(&path, dataset, columns) {
+        let fits = self.fit_exports_for_dataset(self.active_dataset);
+        let fit_count = fits.len();
+        match data_export::save_retained_rows_selected_with_fits(&path, dataset, columns, &fits) {
             Ok(row_count) => {
                 self.status = format!(
-                    "已导出 {row_count} 行、{} 列数据：{}",
+                    "已导出 {row_count} 行、{} 列原始数据及 {fit_count} 个拟合数据区：{}",
                     columns.len(),
                     path.display()
                 )
             }
             Err(error) => self.status = format!("数据导出失败：{error}"),
-        }
-    }
-
-    fn export_fit_curves(&mut self) {
-        if self.fit_overlays.is_empty() {
-            self.status = "没有可导出的拟合曲线".to_owned();
-            return;
-        }
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("CSV 数据", &["csv"])
-            .set_file_name("fitted-curves.csv")
-            .save_file()
-        else {
-            return;
-        };
-        let curves = self
-            .fit_overlays
-            .iter()
-            .map(|fit| data_export::FitCurveExport {
-                name: &fit.name,
-                points: &fit.points,
-                r_squared: fit.r2,
-            })
-            .collect::<Vec<_>>();
-        match data_export::save_fit_curves_csv(&path, &curves) {
-            Ok(row_count) => {
-                self.status = format!(
-                    "已导出 {} 条拟合曲线、{row_count} 个点：{}",
-                    curves.len(),
-                    path.display()
-                )
-            }
-            Err(error) => self.status = format!("拟合曲线导出失败：{error}"),
         }
     }
 
@@ -418,6 +388,7 @@ impl InstPlotLiteApp {
                                 return;
                             };
                             ui.label("选择当前数据集要写入文件的列。");
+                            ui.small("相关拟合曲线会自动作为独立数据区写在原始数据之后。");
                             ui.horizontal(|ui| {
                                 if ui.button("全选").clicked() {
                                     settings.columns.fill(true);
@@ -477,10 +448,14 @@ impl InstPlotLiteApp {
         let Some(directory) = rfd::FileDialog::new().pick_folder() else {
             return;
         };
-        match data_export::save_all_text(&directory, &self.datasets, format) {
+        let fits = (0..self.datasets.len())
+            .map(|index| self.fit_exports_for_dataset(index))
+            .collect::<Vec<_>>();
+        let fit_count = fits.iter().map(Vec::len).sum::<usize>();
+        match data_export::save_all_text_with_fits(&directory, &self.datasets, format, &fits) {
             Ok(summary) => {
                 self.status = format!(
-                    "已导出全部 {} 个数据集、共 {} 行：{}",
+                    "已导出全部 {} 个数据集、共 {} 行及 {fit_count} 个拟合数据区：{}",
                     summary.dataset_count,
                     summary.row_count,
                     directory.display()
@@ -502,10 +477,12 @@ impl InstPlotLiteApp {
         else {
             return;
         };
-        match data_export::save_workbook(&path, &self.datasets) {
+        let fits = self.all_fit_exports();
+        let fit_count = fits.len();
+        match data_export::save_workbook_with_fits(&path, &self.datasets, &fits) {
             Ok(summary) => {
                 self.status = format!(
-                    "已导出全部 {} 个数据集、共 {} 行：{}",
+                    "已导出全部 {} 个数据集及 {fit_count} 个拟合工作表、共 {} 行：{}",
                     summary.dataset_count,
                     summary.row_count,
                     path.display()
@@ -513,6 +490,36 @@ impl InstPlotLiteApp {
             }
             Err(error) => self.status = format!("Excel 导出失败：{error}"),
         }
+    }
+
+    fn fit_exports_for_dataset(
+        &self,
+        dataset_index: usize,
+    ) -> Vec<data_export::FitCurveExport<'_>> {
+        self.fit_overlays
+            .iter()
+            .filter(|fit| {
+                fit.target
+                    .dataset_index
+                    .is_none_or(|target_index| target_index == dataset_index)
+            })
+            .map(|fit| data_export::FitCurveExport {
+                name: &fit.name,
+                points: &fit.points,
+                r_squared: fit.r2,
+            })
+            .collect()
+    }
+
+    fn all_fit_exports(&self) -> Vec<data_export::FitCurveExport<'_>> {
+        self.fit_overlays
+            .iter()
+            .map(|fit| data_export::FitCurveExport {
+                name: &fit.name,
+                points: &fit.points,
+                r_squared: fit.r2,
+            })
+            .collect()
     }
 
     fn request_plot_png(&mut self, context: &egui::Context) {
@@ -619,7 +626,11 @@ impl InstPlotLiteApp {
         }
     }
 
-    fn open_processing_window(&mut self) {
+    fn open_processing_window(&mut self, context: &egui::Context) {
+        if self.processing_open {
+            focus_viewport(context, processing_viewport_id());
+            return;
+        }
         self.processing_settings.scope = ProcessingScope::Current;
         self.processing_settings.selected_datasets = (0..self.datasets.len())
             .map(|index| index == self.active_dataset)
@@ -822,7 +833,7 @@ impl InstPlotLiteApp {
         }
         let mut open = true;
         let mut requested: Option<(ProcessingOperation, String)> = None;
-        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-processing");
+        let viewport_id = processing_viewport_id();
         context.show_viewport_immediate(
             viewport_id,
             egui::ViewportBuilder::default()
@@ -1168,7 +1179,11 @@ impl InstPlotLiteApp {
         }
     }
 
-    fn open_fit_window(&mut self) {
+    fn open_fit_window(&mut self, context: &egui::Context) {
+        if self.fit_open {
+            focus_viewport(context, fitting_viewport_id());
+            return;
+        }
         let Some(dataset) = self.datasets.get(self.active_dataset) else {
             self.status = "请先导入数据".to_owned();
             return;
@@ -1391,7 +1406,7 @@ impl InstPlotLiteApp {
         let mut open = true;
         let mut execute = false;
         let mut clear = false;
-        let viewport_id = egui::ViewportId::from_hash_of("instplot-lite-fitting");
+        let viewport_id = fitting_viewport_id();
         context.show_viewport_immediate(
             viewport_id,
             egui::ViewportBuilder::default()
@@ -1811,17 +1826,9 @@ impl eframe::App for InstPlotLiteApp {
                         ui.close();
                         self.open_export_columns("txt");
                     }
-                    ui.separator();
-                    ui.label(egui::RichText::new("拟合曲线").strong());
-                    if ui
-                        .add_enabled(
-                            !self.fit_overlays.is_empty(),
-                            egui::Button::new("导出全部拟合曲线（CSV）"),
-                        )
-                        .clicked()
-                    {
+                    if ui.button("DAT（制表符分隔）").clicked() {
                         ui.close();
-                        self.export_fit_curves();
+                        self.open_export_columns("dat");
                     }
                     ui.separator();
                     ui.label(egui::RichText::new("全部数据集").strong());
@@ -1841,6 +1848,10 @@ impl eframe::App for InstPlotLiteApp {
                         ui.close();
                         self.export_all_text(data_export::TextExportFormat::Txt);
                     }
+                    if ui.button("多个 DAT 文件").clicked() {
+                        ui.close();
+                        self.export_all_text(data_export::TextExportFormat::Dat);
+                    }
                 });
             });
             if ui
@@ -1850,7 +1861,7 @@ impl eframe::App for InstPlotLiteApp {
                 )
                 .clicked()
             {
-                self.open_processing_window();
+                self.open_processing_window(ui.ctx());
             }
             if ui
                 .add_enabled(
@@ -1859,7 +1870,7 @@ impl eframe::App for InstPlotLiteApp {
                 )
                 .clicked()
             {
-                self.open_fit_window();
+                self.open_fit_window(ui.ctx());
             }
             if ui
                 .add_enabled(self.history.can_undo(), egui::Button::new("← 撤销"))
@@ -2434,6 +2445,19 @@ fn fit_color(index: usize) -> Color32 {
         Color32::from_rgb(166, 223, 105),
     ];
     COLORS[index % COLORS.len()]
+}
+
+fn processing_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("instplot-lite-processing")
+}
+
+fn fitting_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("instplot-lite-fitting")
+}
+
+fn focus_viewport(context: &egui::Context, viewport_id: egui::ViewportId) {
+    context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Minimized(false));
+    context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
 }
 
 fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> bool {

@@ -7,6 +7,8 @@ use encoding_rs::{GBK, UTF_16BE, UTF_16LE};
 
 const TEXT_EXTENSIONS: &[&str] = &["txt", "csv", "dat", "tsv"];
 const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xls"];
+const SECTION_BEGIN: &str = "# -----BEGIN INSTPLOT DATA-----";
+const SECTION_END: &str = "# -----END INSTPLOT DATA-----";
 
 #[derive(Clone, Debug)]
 pub struct NumericColumn {
@@ -254,7 +256,8 @@ pub fn read_data_file(path: &Path) -> Result<Vec<DataSet>, ImportError> {
     }
     let bytes = std::fs::read(path)
         .map_err(|error| ImportError::new("file_read_failed", error.to_string()))?;
-    read_data_bytes(path, &bytes).map(|dataset| vec![dataset])
+    let (text, encoding) = decode_text(&bytes)?;
+    parse_text_datasets(path, &text, encoding)
 }
 
 fn read_spreadsheet(path: &Path) -> Result<Vec<DataSet>, ImportError> {
@@ -442,9 +445,91 @@ fn spreadsheet_cell_text(cell: &Data) -> String {
     cell.to_string().replace(['\r', '\n'], " ")
 }
 
+#[cfg(test)]
 fn read_data_bytes(path: &Path, bytes: &[u8]) -> Result<DataSet, ImportError> {
     let (text, encoding) = decode_text(bytes)?;
     parse_text(path, &text, encoding)
+}
+
+fn parse_text_datasets(
+    path: &Path,
+    text: &str,
+    encoding: String,
+) -> Result<Vec<DataSet>, ImportError> {
+    if !text.lines().any(|line| line.trim() == SECTION_BEGIN) {
+        return parse_text(path, text, encoding).map(|dataset| vec![dataset]);
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名文件");
+    let mut datasets = Vec::new();
+    let mut section_name = None::<String>;
+    let mut section_lines = Vec::<&str>::new();
+    let mut section_start = 0_usize;
+
+    for (line_index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == SECTION_BEGIN {
+            if section_name.is_some() {
+                return Err(ImportError::at_line(
+                    "nested_section",
+                    line_index + 1,
+                    "上一个 InstPlot 数据区尚未结束",
+                ));
+            }
+            section_name = Some(format!("数据区 {}", datasets.len() + 1));
+            section_lines.clear();
+            section_start = line_index + 1;
+            continue;
+        }
+        if trimmed == SECTION_END {
+            let Some(name) = section_name.take() else {
+                return Err(ImportError::at_line(
+                    "unexpected_section_end",
+                    line_index + 1,
+                    "发现了没有对应 BEGIN 的 END 标记",
+                ));
+            };
+            let body = section_lines.join("\n");
+            let mut dataset =
+                parse_text(path, &body, encoding.clone()).map_err(|error| ImportError {
+                    reason: format!("数据区“{name}”：{}", error.reason),
+                    line_number: error.line_number.map(|line| line + section_start),
+                    ..error
+                })?;
+            dataset.label = Some(format!("{file_name} — {name}"));
+            datasets.push(dataset);
+            section_lines.clear();
+            continue;
+        }
+        if let Some(current_name) = section_name.as_mut() {
+            if let Some(name) = trimmed.strip_prefix("# Name:") {
+                let name = name.trim();
+                if !name.is_empty() {
+                    *current_name = name.to_owned();
+                }
+            } else {
+                section_lines.push(line);
+            }
+        }
+    }
+
+    if let Some(name) = section_name {
+        return Err(ImportError::at_line(
+            "unterminated_section",
+            section_start,
+            format!("数据区“{name}”缺少 END 标记"),
+        ));
+    }
+    if datasets.is_empty() {
+        return Err(ImportError::new(
+            "empty_sections",
+            "文件包含 InstPlot 分区标记，但没有可读取的数据区",
+        ));
+    }
+    Ok(datasets)
 }
 
 fn decode_text(bytes: &[u8]) -> Result<(String, String), ImportError> {
@@ -704,6 +789,37 @@ mod tests {
         let datasets = read_data_file(&path).unwrap();
         assert_eq!(datasets.len(), 1);
         assert_eq!(datasets[0].columns[1].values, [2.0, 4.0]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn instplot_begin_end_sections_import_as_independent_datasets() {
+        let path = temporary_path("sections.csv");
+        std::fs::write(
+            &path,
+            b"# -----BEGIN INSTPLOT DATA-----\n# Name: original\nx,y\n1,2\n3,4\n# -----END INSTPLOT DATA-----\n\n# -----BEGIN INSTPLOT DATA-----\n# Name: fitted\nX,Y,R2\n1,2.1,0.99\n3,3.9,0.99\n# -----END INSTPLOT DATA-----\n",
+        )
+        .unwrap();
+
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets.len(), 2);
+        assert!(datasets[0].display_name().contains("original"));
+        assert!(datasets[1].display_name().contains("fitted"));
+        assert_eq!(datasets[0].columns[1].values, [2.0, 4.0]);
+        assert_eq!(datasets[1].columns[1].values, [2.1, 3.9]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn malformed_instplot_section_reports_the_boundary_problem() {
+        let path = temporary_path("unterminated-sections.txt");
+        std::fs::write(
+            &path,
+            b"# -----BEGIN INSTPLOT DATA-----\n# Name: original\nx y\n1 2\n",
+        )
+        .unwrap();
+        let error = read_data_file(&path).unwrap_err();
+        assert_eq!(error.code, "unterminated_section");
         std::fs::remove_file(path).unwrap();
     }
 

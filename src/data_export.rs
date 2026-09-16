@@ -10,6 +10,7 @@ pub enum TextExportFormat {
     Csv,
     Tsv,
     Txt,
+    Dat,
 }
 
 impl TextExportFormat {
@@ -18,13 +19,14 @@ impl TextExportFormat {
             Self::Csv => "csv",
             Self::Tsv => "tsv",
             Self::Txt => "txt",
+            Self::Dat => "dat",
         }
     }
 
     fn delimiter(self) -> u8 {
         match self {
             Self::Csv => b',',
-            Self::Tsv | Self::Txt => b'\t',
+            Self::Tsv | Self::Txt | Self::Dat => b'\t',
         }
     }
 }
@@ -35,48 +37,22 @@ pub struct ExportSummary {
     pub row_count: usize,
 }
 
+#[derive(Clone, Copy)]
 pub struct FitCurveExport<'a> {
     pub name: &'a str,
     pub points: &'a [[f64; 2]],
     pub r_squared: f64,
 }
 
-/// Writes all currently displayed fitted curves to one portable CSV file.
-/// A long row layout keeps curves with different sample counts unambiguous.
-pub fn save_fit_curves_csv(path: &Path, curves: &[FitCurveExport<'_>]) -> Result<usize, String> {
-    if curves.is_empty() {
-        return Err("没有可导出的拟合曲线".to_owned());
-    }
-    let mut writer = csv::Writer::from_path(path).map_err(|error| error.to_string())?;
-    writer
-        .write_record(["拟合曲线", "X", "Y", "R²"])
-        .map_err(|error| error.to_string())?;
-    let mut row_count = 0_usize;
-    for curve in curves {
-        for [x, y] in curve.points {
-            writer
-                .write_record([
-                    curve.name,
-                    &x.to_string(),
-                    &y.to_string(),
-                    &curve.r_squared.to_string(),
-                ])
-                .map_err(|error| error.to_string())?;
-            row_count += 1;
-        }
-    }
-    writer.flush().map_err(|error| error.to_string())?;
-    Ok(row_count)
-}
-
 pub fn suggested_file_stem(dataset: &DataSet) -> String {
     dataset_export_base(dataset)
 }
 
-pub fn save_retained_rows_selected(
+pub fn save_retained_rows_selected_with_fits(
     path: &Path,
     dataset: &DataSet,
     columns: &[usize],
+    fits: &[FitCurveExport<'_>],
 ) -> Result<usize, String> {
     validate_column_selection(dataset, columns)?;
     let extension = path
@@ -85,42 +61,60 @@ pub fn save_retained_rows_selected(
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if extension == "xlsx" {
-        return save_workbook_selected(path, dataset, columns).map(|summary| summary.row_count);
+        save_workbook_selected_with_fits(path, dataset, columns, fits)?;
+        return Ok(retained_row_count(dataset));
     }
     let format = match extension.as_str() {
         "csv" => TextExportFormat::Csv,
         "tsv" => TextExportFormat::Tsv,
         "txt" => TextExportFormat::Txt,
+        "dat" => TextExportFormat::Dat,
         _ => return Err(format!("不支持的数据导出格式：.{extension}")),
     };
-    let bytes = encode_retained_rows_selected(dataset, columns, format.delimiter())?;
+    let bytes = encode_sectioned_text(dataset, columns, fits, format.delimiter())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())?;
     Ok(retained_row_count(dataset))
 }
 
-pub fn save_workbook_selected(
+pub fn save_workbook_selected_with_fits(
     path: &Path,
     dataset: &DataSet,
     columns: &[usize],
+    fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
     validate_column_selection(dataset, columns)?;
-    save_workbook_with_columns(path, std::slice::from_ref(dataset), Some(columns))
+    save_workbook_with_columns(path, std::slice::from_ref(dataset), Some(columns), fits)
 }
 
+#[cfg(test)]
 pub fn save_all_text(
     directory: &Path,
     datasets: &[DataSet],
     format: TextExportFormat,
 ) -> Result<ExportSummary, String> {
+    let fits = vec![Vec::new(); datasets.len()];
+    save_all_text_with_fits(directory, datasets, format, &fits)
+}
+
+pub fn save_all_text_with_fits(
+    directory: &Path,
+    datasets: &[DataSet],
+    format: TextExportFormat,
+    fits_by_dataset: &[Vec<FitCurveExport<'_>>],
+) -> Result<ExportSummary, String> {
     if datasets.is_empty() {
         return Err("没有可导出的数据集".to_owned());
     }
+    if fits_by_dataset.len() != datasets.len() {
+        return Err("拟合结果与数据集数量不匹配".to_owned());
+    }
     let mut reserved_names = HashSet::new();
     let mut row_count = 0_usize;
-    for dataset in datasets {
+    for (dataset, fits) in datasets.iter().zip(fits_by_dataset) {
         let base = format!("{}-cleaned", dataset_export_base(dataset));
         let path = unique_text_path(directory, &base, format.extension(), &mut reserved_names);
-        let bytes = encode_retained_rows(dataset, format.delimiter())?;
+        let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
+        let bytes = encode_sectioned_text(dataset, &columns, fits, format.delimiter())?;
         std::fs::write(&path, bytes).map_err(|error| format!("{}：{error}", path.display()))?;
         row_count += retained_row_count(dataset);
     }
@@ -130,14 +124,24 @@ pub fn save_all_text(
     })
 }
 
+#[cfg(test)]
 pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary, String> {
-    save_workbook_with_columns(path, datasets, None)
+    save_workbook_with_columns(path, datasets, None, &[])
+}
+
+pub fn save_workbook_with_fits(
+    path: &Path,
+    datasets: &[DataSet],
+    fits: &[FitCurveExport<'_>],
+) -> Result<ExportSummary, String> {
+    save_workbook_with_columns(path, datasets, None, fits)
 }
 
 fn save_workbook_with_columns(
     path: &Path,
     datasets: &[DataSet],
     selected_columns: Option<&[usize]>,
+    fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
     if datasets.is_empty() {
         return Err("没有可导出的数据集".to_owned());
@@ -188,6 +192,32 @@ fn save_workbook_with_columns(
         total_rows += usize::try_from(output_row - 1).unwrap_or(usize::MAX);
     }
 
+    for fit in fits {
+        let sheet_name = unique_sheet_name(fit.name, &mut used_sheet_names);
+        let worksheet = workbook.add_worksheet();
+        worksheet
+            .set_name(&sheet_name)
+            .map_err(|error| error.to_string())?;
+        for (column, header) in ["X", "拟合 Y", "R²"].into_iter().enumerate() {
+            worksheet
+                .write_string(0, column as u16, header)
+                .map_err(|error| error.to_string())?;
+        }
+        for (row, [x, y]) in fit.points.iter().enumerate() {
+            let row = u32::try_from(row + 1).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
+            worksheet
+                .write_number(row, 0, *x)
+                .map_err(|error| error.to_string())?;
+            worksheet
+                .write_number(row, 1, *y)
+                .map_err(|error| error.to_string())?;
+            worksheet
+                .write_number(row, 2, fit.r_squared)
+                .map_err(|error| error.to_string())?;
+        }
+        total_rows += fit.points.len();
+    }
+
     workbook.save(path).map_err(|error| error.to_string())?;
     Ok(ExportSummary {
         dataset_count: datasets.len(),
@@ -195,9 +225,58 @@ fn save_workbook_with_columns(
     })
 }
 
+#[cfg(test)]
 fn encode_retained_rows(dataset: &DataSet, delimiter: u8) -> Result<Vec<u8>, String> {
     let columns: Vec<usize> = (0..dataset.columns.len()).collect();
     encode_retained_rows_selected(dataset, &columns, delimiter)
+}
+
+fn encode_sectioned_text(
+    dataset: &DataSet,
+    columns: &[usize],
+    fits: &[FitCurveExport<'_>],
+    delimiter: u8,
+) -> Result<Vec<u8>, String> {
+    if fits.is_empty() {
+        return encode_retained_rows_selected(dataset, columns, delimiter);
+    }
+    const BEGIN: &str = "# -----BEGIN INSTPLOT DATA-----\n";
+    const END: &str = "# -----END INSTPLOT DATA-----\n";
+    let mut output = Vec::new();
+    output.extend_from_slice(BEGIN.as_bytes());
+    output.extend_from_slice(
+        format!("# Name: {}\n", metadata_text(&dataset.display_name())).as_bytes(),
+    );
+    output.extend_from_slice(b"# Type: source\n\n");
+    output.extend_from_slice(&encode_retained_rows_selected(dataset, columns, delimiter)?);
+    output.extend_from_slice(b"\n");
+    output.extend_from_slice(END.as_bytes());
+
+    for fit in fits {
+        output.extend_from_slice(b"\n");
+        output.extend_from_slice(BEGIN.as_bytes());
+        output.extend_from_slice(format!("# Name: {}\n", metadata_text(fit.name)).as_bytes());
+        output.extend_from_slice(b"# Type: fit\n\n");
+        let mut writer = csv::WriterBuilder::new()
+            .delimiter(delimiter)
+            .from_writer(Vec::new());
+        writer
+            .write_record(["X", "拟合 Y", "R²"])
+            .map_err(|error| error.to_string())?;
+        for [x, y] in fit.points {
+            writer
+                .write_record([x.to_string(), y.to_string(), fit.r_squared.to_string()])
+                .map_err(|error| error.to_string())?;
+        }
+        output.extend_from_slice(&writer.into_inner().map_err(|error| error.to_string())?);
+        output.extend_from_slice(b"\n");
+        output.extend_from_slice(END.as_bytes());
+    }
+    Ok(output)
+}
+
+fn metadata_text(value: &str) -> String {
+    value.replace(['\r', '\n'], " ").trim().to_owned()
 }
 
 fn encode_retained_rows_selected(
@@ -361,7 +440,8 @@ fn unique_sheet_name(value: &str, used: &mut HashSet<String>) -> String {
 mod tests {
     use super::{
         FitCurveExport, TextExportFormat, encode_retained_rows, encode_retained_rows_selected,
-        save_all_text, save_fit_curves_csv, save_workbook,
+        save_all_text, save_retained_rows_selected_with_fits, save_workbook,
+        save_workbook_with_fits,
     };
     use crate::data::{DataSet, NumericColumn, read_data_file};
     use std::path::PathBuf;
@@ -415,12 +495,14 @@ mod tests {
     }
 
     #[test]
-    fn fitted_curve_export_keeps_each_curve_name_and_points() {
-        let directory = temporary_directory("fitted-curves");
-        let path = directory.join("fits.csv");
+    fn sectioned_csv_round_trip_keeps_original_and_fit_independent() {
+        let directory = temporary_directory("sectioned-curves");
+        let path = directory.join("combined.csv");
         let points = [[0.0, 1.0], [1.0, 3.0]];
-        let written = save_fit_curves_csv(
+        let written = save_retained_rows_selected_with_fits(
             &path,
+            &dataset("sample.csv"),
+            &[0, 1],
             &[FitCurveExport {
                 name: "sample · 拟合 1",
                 points: &points,
@@ -430,8 +512,61 @@ mod tests {
         .unwrap();
         assert_eq!(written, 2);
         let csv = std::fs::read_to_string(path).unwrap();
-        assert!(csv.contains("拟合曲线,X,Y,R²"));
-        assert!(csv.contains("sample · 拟合 1,0,1,0.98"));
+        assert_eq!(csv.matches("# -----BEGIN INSTPLOT DATA-----").count(), 2);
+        assert!(csv.contains("# Name: sample · 拟合 1"));
+        let imported = read_data_file(&directory.join("combined.csv")).unwrap();
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].columns[0].values, [1.0, 3.0]);
+        assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn sectioned_tabular_text_formats_round_trip() {
+        let directory = temporary_directory("sectioned-text-formats");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        for extension in ["tsv", "txt", "dat"] {
+            let path = directory.join(format!("combined.{extension}"));
+            save_retained_rows_selected_with_fits(
+                &path,
+                &dataset("sample.csv"),
+                &[0, 1],
+                &[FitCurveExport {
+                    name: "sample fitted",
+                    points: &points,
+                    r_squared: 0.98,
+                }],
+            )
+            .unwrap();
+            let imported = read_data_file(&path).unwrap();
+            assert_eq!(imported.len(), 2, "failed for {extension}");
+            assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn xlsx_appends_fit_as_the_last_sheet_and_round_trips() {
+        let directory = temporary_directory("xlsx-fitted-curves");
+        let path = directory.join("combined.xlsx");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        save_workbook_with_fits(
+            &path,
+            &[dataset("sample.csv")],
+            &[FitCurveExport {
+                name: "sample fitted",
+                points: &points,
+                r_squared: 0.98,
+            }],
+        )
+        .unwrap();
+
+        let imported = read_data_file(&path).unwrap();
+        assert_eq!(imported.len(), 2);
+        assert!(imported[0].display_name().contains("sample"));
+        assert!(imported[1].display_name().contains("sample fitted"));
+        assert_eq!(imported[1].columns[0].values, [0.0, 1.0]);
+        assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
