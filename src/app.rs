@@ -2125,6 +2125,14 @@ impl InstPlotLiteApp {
         details
     }
 
+    fn split_fit_display_equation(equation: &str) -> (&str, Option<&str>) {
+        equation.find("  (").map_or((equation, None), |index| {
+            let formula = &equation[..index];
+            let parameters = equation[index + 2..].trim();
+            (formula, (!parameters.is_empty()).then_some(parameters))
+        })
+    }
+
     fn show_data_controls(&mut self, ui: &mut egui::Ui, vertical: bool) -> Vec<String> {
         if self.datasets.is_empty() {
             ui.label("尚未导入数据");
@@ -2279,10 +2287,24 @@ impl InstPlotLiteApp {
             ui.add_space(8.0);
             ui.separator();
             ui.strong("拟合结果");
-            for (display_equation, precise_equation, r2) in fit_details {
-                ui.add(egui::Label::new(display_equation).wrap())
+            for (index, (display_equation, precise_equation, r2)) in
+                fit_details.into_iter().enumerate()
+            {
+                if index > 0 {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                }
+                let (formula, parameters) = Self::split_fit_display_equation(&display_equation);
+                ui.add(egui::Label::new(formula).wrap())
                     .on_hover_text(format!("完整精度：{precise_equation}"));
+                if let Some(parameters) = parameters {
+                    ui.add_space(5.0);
+                    ui.add(egui::Label::new(egui::RichText::new(parameters).small()).wrap())
+                        .on_hover_text(format!("完整精度：{precise_equation}"));
+                }
                 if let Some(r2) = r2 {
+                    ui.add_space(5.0);
                     ui.small(format!("R² = {r2:.6}"));
                 }
             }
@@ -3384,11 +3406,11 @@ fn fit_overlay_matches_coordinates(
 #[cfg(test)]
 mod tests {
     use super::{
-        AxisDisplay, FitOverlay, FitScope, FitTarget, compact_label, configure_interface_style,
-        dataset_plot_columns, demo_curve, fit_dataset_indices, fit_overlay_matches_coordinates,
-        format_axis_decimal, is_inside_range, legend_series_name, plot_coordinate_names,
-        preferred_import_columns, sole_selected_index, store_fit_overlay, store_fit_overlays,
-        synchronize_selection, wheel_zoom_factor,
+        AxisDisplay, FitOverlay, FitScope, FitTarget, InstPlotLiteApp, compact_label,
+        configure_interface_style, dataset_plot_columns, demo_curve, fit_dataset_indices,
+        fit_overlay_matches_coordinates, format_axis_decimal, is_inside_range, legend_series_name,
+        plot_coordinate_names, preferred_import_columns, sole_selected_index, store_fit_overlay,
+        store_fit_overlays, synchronize_selection, wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
@@ -3432,6 +3454,20 @@ mod tests {
         let mut columns = vec![false];
         synchronize_selection(&mut columns, 3, true);
         assert_eq!(columns, [false, true, true]);
+    }
+
+    #[test]
+    fn custom_fit_display_separates_formula_from_parameters() {
+        assert_eq!(
+            InstPlotLiteApp::split_fit_display_equation(
+                "y = a * cos(x) + b  (a=7.01e-7, b=9.69e-8)"
+            ),
+            ("y = a * cos(x) + b", Some("(a=7.01e-7, b=9.69e-8)"))
+        );
+        assert_eq!(
+            InstPlotLiteApp::split_fit_display_equation("y = 2×x + 1"),
+            ("y = 2×x + 1", None)
+        );
     }
 
     #[test]
