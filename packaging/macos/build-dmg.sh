@@ -100,4 +100,8 @@ hdiutil create -quiet -fs HFS+ -format UDBZ -volname "$app_name" \
     -srcfolder "$dmg_root" "$dmg_path"
 hdiutil verify "$dmg_path"
 
+# The packaged DMG is the distributable artifact. Keeping either staging app
+# makes Spotlight report extra InstPlot Lite installations.
+rm -rf "$app_dir" "$iconset_dir" "$dmg_root"
+
 printf '%s\n' "$dmg_path"
