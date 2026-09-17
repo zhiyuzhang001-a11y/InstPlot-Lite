@@ -91,7 +91,7 @@ impl AxisDisplay {
             notes.push(format!("基准 {}", format_axis_reference(self.offset)));
         }
         if self.exponent != 0 {
-            notes.push(format!("×10{}", superscript_integer(self.exponent)));
+            notes.push(format!("×10^({})", self.exponent));
         }
         if notes.is_empty() {
             name.to_owned()
@@ -2562,28 +2562,7 @@ fn format_axis_reference(value: f64) -> String {
     let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
     let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
     let exponent = exponent.parse::<i32>().unwrap_or(0);
-    format!("{mantissa}×10{}", superscript_integer(exponent))
-}
-
-fn superscript_integer(value: i32) -> String {
-    value
-        .to_string()
-        .chars()
-        .map(|character| match character {
-            '-' => '⁻',
-            '0' => '⁰',
-            '1' => '¹',
-            '2' => '²',
-            '3' => '³',
-            '4' => '⁴',
-            '5' => '⁵',
-            '6' => '⁶',
-            '7' => '⁷',
-            '8' => '⁸',
-            '9' => '⁹',
-            _ => character,
-        })
-        .collect()
+    format!("{mantissa}×10^({exponent})")
 }
 
 fn legend_series_name(name: &str, is_active: bool) -> String {
@@ -2991,7 +2970,7 @@ mod tests {
         let display = AxisDisplay::from_range(Some([-0.000012, 0.0]));
         assert_eq!(display.exponent, -6);
         assert_eq!(display.offset, 0.0);
-        assert_eq!(display.label("2χ"), "2χ（×10⁻⁶）");
+        assert_eq!(display.label("2χ"), "2χ（×10^(-6)）");
         assert_eq!(display.format_tick(-0.000001, 0.000001), "-1");
         assert_eq!(display.format_tick(0.0, 0.000001), "0");
     }
@@ -3001,7 +2980,7 @@ mod tests {
         let display = AxisDisplay::from_range(Some([10_000_000.001, 10_000_000.011]));
         assert!((display.offset - 10_000_000.0).abs() < 1.0e-9);
         assert_eq!(display.exponent, -3);
-        assert_eq!(display.label("signal"), "signal（基准 1×10⁷；×10⁻³）");
+        assert_eq!(display.label("signal"), "signal（基准 1×10^(7)；×10^(-3)）");
         assert_eq!(display.format_tick(10_000_000.001, 0.001), "1");
     }
 
