@@ -44,9 +44,8 @@ InstPlot Lite 面向需要快速查看实验数据的学生和科研人员。它
 ### macOS
 
 - Apple 芯片（M1、M2、M3、M4 等）：下载 `InstPlot-Lite-0.3.1-macos-arm64.dmg`。
-- Intel 芯片：下载 `InstPlot-Lite-0.3.1-macos-x86_64.dmg`。
 
-不知道芯片类型时，点击屏幕左上角苹果图标，选择 **关于本机**：显示“芯片 Apple …”就选 `arm64`，显示“处理器 Intel …”就选 `x86_64`。打开 DMG 后，将 **InstPlot Lite** 拖入 **Applications（应用程序）**。
+从 v0.3.1 起仅维护 Apple Silicon（arm64）版本，不再提供或更新 Intel Mac 安装包。打开 DMG 后，将 **InstPlot Lite** 拖入 **Applications（应用程序）**。
 
 ### Linux（64 位）
 
@@ -134,7 +133,7 @@ InstPlot Lite 不创建用户数据库、设置文件、日志或应用缓存，
 
 - 目前是未签名预览版，首次打开可能出现系统安全提示。
 - 图片只导出 PNG；暂不提供出版级 SVG/PDF 排版和复杂样式编辑。
-- 当前安装包覆盖 Windows x64、Apple Silicon、Intel Mac 和 Linux x64。
+- 当前安装包覆盖 Windows x64、Apple Silicon 和 Linux x64；macOS Intel 版本自 v0.3.1 起停止维护。
 - 不同仪器厂商可能使用特殊 TXT/DAT 变体；遇到无法识别的文件时请反馈一个可公开的脱敏样本。
 
 ## 遇到问题

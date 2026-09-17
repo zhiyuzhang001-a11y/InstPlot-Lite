@@ -18,7 +18,7 @@
 - 对称、归一化、多项式去背底、局部展平和 Savitzky–Golay 去噪。
 - 原生多项式、指数、对数、幂函数和自定义表达式拟合，不依赖 SciPy。
 - 导出 CSV、XLSX、TSV、TXT，以及白底、黑色刻度、浅灰网格的 PNG。
-- Windows x64 Setup EXE、Apple Silicon / Intel Mac DMG、Debian/Ubuntu DEB 和 Linux x64 便携包。
+- Windows x64 Setup EXE、Apple Silicon Mac DMG、Debian/Ubuntu DEB 和 Linux x64 便携包。
 - 三系统安装、启动、导入、导出和卸载自动化验证。
 - 内置 Arial 度量兼容英文字体和简体中文字体，不依赖系统字体。
 - 应用不创建用户数据库、设置、日志或缓存，可按系统标准方式干净卸载。
@@ -26,7 +26,7 @@
 ## 当前验证基线
 
 - Lite 原生测试：`102 passed`
-- 最新功能矩阵：Windows、macOS ARM、macOS Intel、Ubuntu 和 Linux 安装包全部通过
+- 最新功能矩阵：Windows、macOS ARM、Ubuntu 和 Linux 安装包全部通过；macOS Intel 自 v0.3.1 起停止维护
 - 优化后的 macOS ARM 可执行文件约 `6.8 MB`
 - 当前安装包约 `4–6 MB`
 - 10 万行、4 列、2 工作表的 1.9 MiB XLSX 在开发用 Apple Silicon Mac 的检查模式中解析约 `0.07 s`，峰值 RSS 约 `38.6 MB`

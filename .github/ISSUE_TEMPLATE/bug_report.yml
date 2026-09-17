@@ -16,7 +16,6 @@ body:
         - Windows 10
         - Windows 11
         - macOS（Apple 芯片）
-        - macOS（Intel 芯片）
         - Ubuntu / Debian Linux
         - 其他 Linux
     validations:

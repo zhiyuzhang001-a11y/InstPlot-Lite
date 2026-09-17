@@ -150,11 +150,12 @@ overwrite or retain-derived-columns policy. The denoising implementation reuses 
 convolution weights in the interior rather than fitting a new polynomial for
 every row. Current-dataset data export also offers explicit column selection.
 
-The complete source history is merged into `main`. GitHub CI has built and
-validated the Windows x64 installer, macOS arm64 and x86_64 DMGs, Linux amd64
-DEB, and Linux x86_64 portable archive. The Windows installer completed silent
+The complete source history is merged into `main`. GitHub CI builds and
+validates the Windows x64 installer, macOS arm64 DMG, Linux amd64 DEB, and
+Linux x86_64 portable archive. macOS Intel builds are no longer maintained as
+of v0.3.1. The Windows installer completed silent
 install, bundled importer execution, and uninstall; the Linux DEB completed the
-same installation lifecycle; both DMGs passed structure, checksum, bundled
+same installation lifecycle; the macOS DMG passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the

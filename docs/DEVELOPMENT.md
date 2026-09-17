@@ -24,12 +24,13 @@ cargo build --release
 
 ## Download
 
-The [v0.2.0 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.2.0)
-provides native installers for Windows x64, Apple Silicon and Intel Macs, and
-Linux x64. End users do not need Rust, Cargo, Python, or a terminal.
+The [v0.3.1 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.1)
+provides native installers for Windows x64, Apple Silicon Macs, and Linux x64.
+macOS Intel builds are no longer maintained as of v0.3.1. End users do not need
+Rust, Cargo, Python, or a terminal.
 
 - Windows 10/11: download and run the Setup EXE.
-- macOS: download the DMG matching the Mac processor, open it, and drag
+- macOS on Apple Silicon: download the arm64 DMG, open it, and drag
   **InstPlot Lite** to Applications.
 - Debian/Ubuntu: download and open the DEB with the graphical package manager.
 - Other compatible x64 Linux systems: use the portable tar archive.
