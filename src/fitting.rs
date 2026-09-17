@@ -58,6 +58,7 @@ impl fmt::Display for FitError {
 
 impl std::error::Error for FitError {}
 
+#[allow(clippy::type_complexity)]
 pub fn fit_values(x: &[f64], y: &[f64], method: &FitMethod) -> Result<FitResult, FitError> {
     validate_values(x, y)?;
     let (parameters, equation, evaluator): (Vec<f64>, String, Box<dyn Fn(f64, &[f64]) -> f64>) =

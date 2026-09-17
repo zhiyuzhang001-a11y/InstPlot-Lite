@@ -474,7 +474,7 @@ impl InstPlotLiteApp {
         };
     }
 
-    fn open_data_export(&mut self, format: DataExportFormat) {
+    fn open_data_export(&mut self, context: &egui::Context, format: DataExportFormat) {
         if self.datasets.is_empty() {
             self.status = "请先导入数据".to_owned();
             return;
@@ -495,6 +495,7 @@ impl InstPlotLiteApp {
             column_dataset: Some(self.active_dataset),
             columns,
         });
+        focus_viewport(context, export_viewport_id());
     }
 
     fn show_export_columns_window(&mut self, context: &egui::Context) {
@@ -538,14 +539,18 @@ impl InstPlotLiteApp {
 
         let mut open = true;
         let mut export = false;
-        egui::Window::new(format!("导出 {format_label}"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(430.0)
-            .default_height(560.0)
-            .min_height(360.0)
-            .show(context, |ui| {
+        context.show_viewport_immediate(
+            export_viewport_id(),
+            egui::ViewportBuilder::default()
+                .with_title(format!("InstPlot Lite · 导出 {format_label}"))
+                .with_inner_size([470.0, 620.0])
+                .with_min_inner_size([380.0, 360.0])
+                .with_resizable(true),
+            |ui, _class| {
+                if ui.ctx().input(|input| input.viewport().close_requested()) {
+                    open = false;
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -684,7 +689,8 @@ impl InstPlotLiteApp {
                         });
                         ui.add_space(10.0);
                     });
-            });
+            },
+        );
         if export {
             if let Some(settings) = self.export_selection.take() {
                 self.export_selected_data(settings);
@@ -2083,31 +2089,56 @@ impl InstPlotLiteApp {
         if vertical {
             let control_width = (ui.available_width() - 10.0).max(100.0);
             ui.add_space(8.0);
-            ui.label("X 列");
-            ui.add_enabled_ui(!linked_fit, |ui| {
-                column_combo(ui, "x-column", &mut self.x_column, control_width);
-            });
-            ui.add_space(6.0);
-            ui.label("Y 列");
-            ui.add_enabled_ui(!linked_fit, |ui| {
-                column_combo(ui, "y-column", &mut self.y_column, control_width);
+            ui.label(if linked_fit {
+                "X 列（拟合关联）"
+            } else {
+                "X 列"
             });
             if linked_fit {
-                ui.small("关联拟合固定使用 X / 拟合 Y，并按原始列叠加。");
+                ui.add_sized(
+                    [control_width, 24.0],
+                    egui::Label::new(column_names.first().map(String::as_str).unwrap_or("X")),
+                );
+            } else {
+                column_combo(ui, "x-column", &mut self.x_column, control_width);
+            }
+            ui.add_space(6.0);
+            ui.label(if linked_fit {
+                "Y 列（拟合关联）"
+            } else {
+                "Y 列"
+            });
+            if linked_fit {
+                ui.add_sized(
+                    [control_width, 24.0],
+                    egui::Label::new(column_names.get(1).map(String::as_str).unwrap_or("拟合 Y")),
+                );
+            } else {
+                column_combo(ui, "y-column", &mut self.y_column, control_width);
+            }
+            if linked_fit {
+                ui.small("关联拟合固定使用 X / 拟合 Y，因此这里显示固定列而不是下拉框。");
             }
         } else {
             ui.horizontal_wrapped(|ui| {
                 ui.label("X 列");
-                ui.add_enabled_ui(!linked_fit, |ui| {
+                if linked_fit {
+                    ui.label(column_names.first().map(String::as_str).unwrap_or("X"));
+                } else {
                     column_combo(ui, "x-column", &mut self.x_column, 120.0);
-                });
+                }
                 ui.label("Y 列");
-                ui.add_enabled_ui(!linked_fit, |ui| {
+                if linked_fit {
+                    ui.label(column_names.get(1).map(String::as_str).unwrap_or("拟合 Y"));
+                } else {
                     column_combo(ui, "y-column", &mut self.y_column, 120.0);
-                });
+                }
                 ui.separator();
                 ui.label("左键点选/框选删除 · 滚轮缩放 · 右键拖动平移");
             });
+            if linked_fit {
+                ui.small("关联拟合固定使用 X / 拟合 Y，因此这里显示固定列而不是下拉框。");
+            }
         }
         if (self.x_column, self.y_column) != previous_columns {
             self.reset_after_coordinate_change();
@@ -2221,23 +2252,23 @@ impl eframe::App for InstPlotLiteApp {
                 ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
                     if ui.button("CSV").clicked() {
                         ui.close();
-                        self.open_data_export(DataExportFormat::Csv);
+                        self.open_data_export(ui.ctx(), DataExportFormat::Csv);
                     }
                     if ui.button("Excel（XLSX）").clicked() {
                         ui.close();
-                        self.open_data_export(DataExportFormat::Xlsx);
+                        self.open_data_export(ui.ctx(), DataExportFormat::Xlsx);
                     }
                     if ui.button("TSV").clicked() {
                         ui.close();
-                        self.open_data_export(DataExportFormat::Tsv);
+                        self.open_data_export(ui.ctx(), DataExportFormat::Tsv);
                     }
                     if ui.button("TXT（制表符分隔）").clicked() {
                         ui.close();
-                        self.open_data_export(DataExportFormat::Txt);
+                        self.open_data_export(ui.ctx(), DataExportFormat::Txt);
                     }
                     if ui.button("DAT（制表符分隔）").clicked() {
                         ui.close();
-                        self.open_data_export(DataExportFormat::Dat);
+                        self.open_data_export(ui.ctx(), DataExportFormat::Dat);
                     }
                 });
             });
@@ -3066,6 +3097,10 @@ fn processing_viewport_id() -> egui::ViewportId {
 
 fn fitting_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("instplot-lite-fitting")
+}
+
+fn export_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("instplot-lite-export")
 }
 
 fn focus_viewport(context: &egui::Context, viewport_id: egui::ViewportId) {

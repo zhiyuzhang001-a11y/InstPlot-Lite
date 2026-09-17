@@ -32,27 +32,26 @@ InstPlot Lite 面向需要快速查看实验数据的学生和科研人员。它
 
 ## 下载与安装
 
-当前公开版本是 **v0.3.0 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.0)向下找到 **Assets**，根据电脑选择文件。
+当前公开版本是 **v0.3.1 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.1)向下找到 **Assets**，根据电脑选择文件。
 
 > [!NOTE]
-> 本页功能说明和截图对应当前开发主线。白底 PNG、滚轮缩放和跨系统界面一致性等近期改进
-> v0.3.0 包含公式计算、多曲线处理、覆盖/保留写入选择和按列导出等改进。
+> v0.3.1 包含自适应坐标显示、拟合结果导入导出闭环、多数据集与按列导出、独立可缩放工具窗口，以及稳定性修复。
 
 ### Windows 10 / 11（64 位）
 
-下载 `InstPlot-Lite-0.3.0-windows-x64-setup.exe`，然后双击安装。安装器不要求管理员权限，并会创建开始菜单入口；安装时可以选择是否创建桌面快捷方式。
+下载 `InstPlot-Lite-0.3.1-windows-x64-setup.exe`，然后双击安装。安装器不要求管理员权限，并会创建开始菜单入口；安装时可以选择是否创建桌面快捷方式。
 
 ### macOS
 
-- Apple 芯片（M1、M2、M3、M4 等）：下载 `InstPlot-Lite-0.3.0-macos-arm64.dmg`。
-- Intel 芯片：下载 `InstPlot-Lite-0.3.0-macos-x86_64.dmg`。
+- Apple 芯片（M1、M2、M3、M4 等）：下载 `InstPlot-Lite-0.3.1-macos-arm64.dmg`。
+- Intel 芯片：下载 `InstPlot-Lite-0.3.1-macos-x86_64.dmg`。
 
 不知道芯片类型时，点击屏幕左上角苹果图标，选择 **关于本机**：显示“芯片 Apple …”就选 `arm64`，显示“处理器 Intel …”就选 `x86_64`。打开 DMG 后，将 **InstPlot Lite** 拖入 **Applications（应用程序）**。
 
 ### Linux（64 位）
 
-- Ubuntu / Debian：下载 `instplot-lite_0.3.0_amd64.deb`，用系统的软件安装器打开。
-- 其他兼容发行版：下载 `InstPlot-Lite-0.3.0-linux-x86_64.tar.gz`，解压后运行其中的 `instplot-lite`。
+- Ubuntu / Debian：下载 `instplot-lite_0.3.1_amd64.deb`，用系统的软件安装器打开。
+- 其他兼容发行版：下载 `InstPlot-Lite-0.3.1-linux-x86_64.tar.gz`，解压后运行其中的 `instplot-lite`。
 
 ### 第一次打开时的安全提示
 

@@ -573,8 +573,8 @@ fn smooth_segment(
         .map(|(index, value)| (index as f64, *value))
         .collect();
     let last_model = fit_polynomial(&last_points, order, "denoise")?;
-    for index in input.len() - half..input.len() {
-        output[index] = last_model.evaluate((index - last_start) as f64);
+    for (index, value) in output.iter_mut().enumerate().skip(input.len() - half) {
+        *value = last_model.evaluate((index - last_start) as f64);
     }
     Ok(())
 }
@@ -684,10 +684,11 @@ fn fit_polynomial(
             .iter()
             .map(|point| ((point.0 - center) / scale).powi(column as i32))
             .collect();
-        for previous in 0..column {
-            let projection = dot(&q_columns[previous], &values);
-            upper[previous][column] = projection;
-            for (value, basis) in values.iter_mut().zip(&q_columns[previous]) {
+        let mut projections = Vec::with_capacity(column);
+        for basis_column in &q_columns {
+            let projection = dot(basis_column, &values);
+            projections.push(projection);
+            for (value, basis) in values.iter_mut().zip(basis_column) {
                 *value -= projection * basis;
             }
         }
@@ -699,7 +700,11 @@ fn fit_polynomial(
                 "拟合 X 值无法确定多项式",
             ));
         }
-        upper[column][column] = norm;
+        let (previous_rows, current_rows) = upper.split_at_mut(column);
+        for (row, projection) in previous_rows.iter_mut().zip(projections) {
+            row[column] = projection;
+        }
+        current_rows[0][column] = norm;
         for value in &mut values {
             *value /= norm;
         }
