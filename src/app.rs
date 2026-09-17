@@ -513,13 +513,7 @@ impl InstPlotLiteApp {
                 usize::from(has_fit || self.datasets[index].kind == data::DataSetKind::Fit) + 1
             })
             .collect::<Vec<_>>();
-        let selected_indices = settings
-            .datasets
-            .iter()
-            .enumerate()
-            .filter_map(|(index, selected)| selected.then_some(index))
-            .collect::<Vec<_>>();
-        let sole_dataset = (selected_indices.len() == 1).then_some(selected_indices[0]);
+        let sole_dataset = sole_selected_index(&settings.datasets);
         let column_names = sole_dataset
             .and_then(|index| self.datasets.get(index))
             .map(|dataset| {
@@ -618,13 +612,7 @@ impl InstPlotLiteApp {
                                 ui.small("多数据集导出会保留各自全部列和相关拟合结果。");
                             }
 
-                            let sole = settings
-                                .datasets
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, selected)| selected.then_some(index))
-                                .collect::<Vec<_>>();
-                            let sole = (sole.len() == 1).then_some(sole[0]);
+                            let sole = sole_selected_index(&settings.datasets);
                             if let Some(dataset_index) = sole {
                                 ui.separator();
                                 ui.label("选择列");
@@ -2602,6 +2590,15 @@ fn is_inside_range(value: f64, first: f64, second: f64) -> bool {
     value >= first.min(second) && value <= first.max(second)
 }
 
+fn sole_selected_index(selected: &[bool]) -> Option<usize> {
+    let mut indices = selected
+        .iter()
+        .enumerate()
+        .filter_map(|(index, is_selected)| is_selected.then_some(index));
+    let first = indices.next()?;
+    indices.next().is_none().then_some(first)
+}
+
 fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
     let mut minimum = f64::INFINITY;
     let mut maximum = f64::NEG_INFINITY;
@@ -3083,7 +3080,8 @@ mod tests {
     use super::{
         AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style,
         dataset_plot_columns, demo_curve, format_axis_decimal, is_inside_range, legend_series_name,
-        plot_coordinate_names, preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
+        plot_coordinate_names, preferred_import_columns, sole_selected_index, store_fit_overlay,
+        wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
@@ -3106,6 +3104,14 @@ mod tests {
         assert!(wheel_zoom_factor(120.0) > 1.0);
         assert!(wheel_zoom_factor(-120.0) < 1.0);
         assert_eq!(wheel_zoom_factor(0.0), 1.0);
+    }
+
+    #[test]
+    fn sole_selection_handles_none_one_and_many_without_indexing_empty_state() {
+        assert_eq!(sole_selected_index(&[]), None);
+        assert_eq!(sole_selected_index(&[false, false]), None);
+        assert_eq!(sole_selected_index(&[false, true, false]), Some(1));
+        assert_eq!(sole_selected_index(&[true, true]), None);
     }
 
     #[test]
