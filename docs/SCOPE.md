@@ -42,9 +42,9 @@ maintained separately as a source-only behavioral reference.
 - Data edits never reset the current viewport.
 - The processing controls use an independently movable native tool window.
 - Desktop-width layouts place dataset and axis selectors in a content-aware
-  185–280-point left sidebar; widths below 820 points use compact horizontal
+  180–220-point left sidebar; widths below 820 points use compact horizontal
   controls.
-- Plot layout reserves a 36-point left gutter for the vertical Y-axis label and keeps
+- Plot layout reserves a 20-point left gutter for the vertical Y-axis label and keeps
   the status/coordinate bar inside the main viewport.
 - Undo and redo operate on deletion commands and deterministic processing
   recipes without retaining full-table history copies.

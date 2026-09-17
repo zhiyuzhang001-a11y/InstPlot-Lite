@@ -1,9 +1,9 @@
 # InstPlot Lite status
 
-Updated: 2026-09-11
+Updated: 2026-09-17
 
 > [!NOTE]
-> InstPlot Lite is now the current user-facing product. The v0.3.0 unsigned
+> InstPlot Lite is now the current user-facing product. The v0.3.1 unsigned
 > preview contains the core workflow plus formula calculation, multi-curve
 > processing, explicit export-column selection, and reversible overwrite or
 > retain processing results.
@@ -53,8 +53,8 @@ a terminal.
   coordinates and retains the existing deletion workflow.
 - The interface now uses rounded, larger controls and a 13-point minimum text
   size. Status text uses the 15-point body size, axis titles use bold 17-point
-  text, and the plot reserves a 36-point left gutter for long Y-axis labels.
-- Dataset and X/Y controls now occupy a content-aware 185–280-point left sidebar
+  text, and the plot reserves a 20-point left gutter for long Y-axis labels.
+- Dataset and X/Y controls now occupy a content-aware 180–220-point left sidebar
   on desktop-sized windows. Dropdowns retain a right inset, while reset/clear
   buttons use their natural text widths instead of stretching across the panel.
   Below 820 points wide the controls return to a compact horizontal layout.
@@ -76,8 +76,9 @@ a terminal.
   `y`), supports parameters and common mathematical functions, and accepts
   constant expressions such as fractions and parenthesized values for formula
   coefficients and custom-fit initial values.
-- Processing can target the active curve, an explicit multi-selection, or all
-  curves. Each batch validates every target before changing any dataset.
+- Processing can target the active curve or an explicit multi-selection. The
+  multi-selection offers Select All / Select None, and every batch validates
+  every target before changing any dataset.
 - A command-line check mode supports remote and CI validation without opening a
   GUI window.
 - Positional file paths are accepted so desktop launchers can open data files
@@ -89,7 +90,7 @@ a terminal.
   Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
   CI verifies the installed Windows and Linux license files; the macOS DMG keeps
   them both in a visible folder and inside the installed app bundle.
-- Fifty-eight local tests pass with no compiler warnings, including real XLS and
+- One hundred two local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
 
@@ -144,8 +145,8 @@ The lightweight processing slice is locally complete. Symmetry, normalization,
 background removal, local flattening, denoising, and formula calculation are
 available through a separately movable native **数据处理** window. They preserve
 NaN/Inf positions and can be undone and redone; users can choose a single
-curve, several selected curves, or all curves, with a window-wide overwrite or
-retain-derived-columns policy. The denoising implementation reuses fixed
+curve or several selected curves (including Select All), with a window-wide
+overwrite or retain-derived-columns policy. The denoising implementation reuses fixed
 convolution weights in the interior rather than fitting a new polynomial for
 every row. Current-dataset data export also offers explicit column selection.
 
@@ -157,7 +158,7 @@ same installation lifecycle; both DMGs passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the
-[v0.2.0 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.2.0),
+[v0.3.1 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.1),
 together with a five-entry SHA-256 checksum manifest. The release is
 intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
@@ -166,7 +167,7 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.3.0 preview release is complete. Stable-release promotion still
+The unsigned v0.3.1 preview release is complete. Stable-release promotion still
 requires release-owner credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.

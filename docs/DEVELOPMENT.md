@@ -67,14 +67,16 @@ on first launch. Checksums are published with the release notes.
 - Click **数据处理** for the reference application's center,
   center-then-normalize, polynomial background removal, local flattening, and
   Savitzky–Golay denoising operations in a movable native tool window.
-  Processing creates a selected derived column and never overwrites the
-  imported column. Local flattening removes the fitted linear slope inside a
+  Processing can overwrite the selected source column (the default) or retain
+  a derived column, and can target the current curve or an explicit
+  multi-selection. Local flattening removes the fitted linear slope inside a
   chosen X interval while preserving the selected anchor position.
 - Click **曲线拟合** for polynomial (degree 1–10), exponential, logarithmic,
   power-law, or custom-expression fitting. The movable fit window supports the
-  active dataset or merged same-name columns, optional X/Y ranges, and
-  degree/radian conversion. It reports the equation, R², and retained point
-  count, then draws the fitted curve directly on the main plot. The fitting
+  active curve or an explicit multi-selection whose curves are fitted
+  independently, plus optional X/Y ranges and degree/radian conversion. It
+  reports the equation, R², and retained point count, then draws each fitted
+  curve directly on the matching main-plot coordinates. The fitting
   implementation is native Rust and does not require Python or SciPy.
 - Click **导出图片** to save the complete plot as a white-background PNG with
   black tick values and labels, X/Y axis labels, and the legend, but excluding

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use eframe::egui::{self, Color32, PointerButton, Rect, Stroke, StrokeKind};
+use eframe::egui::{
+    self, Color32, PointerButton, Rect, Stroke, StrokeKind,
+    containers::scroll_area::{ScrollBarVisibility, ScrollSource},
+};
 use egui_plot::{Legend, Line, Plot, PlotPoint, Points};
 
 use crate::{
@@ -11,9 +14,11 @@ use crate::{
     processing::{self, Anchor, ProcessingMetadata, ProcessingOperation},
 };
 
-const PLOT_LEFT_GUTTER: f32 = 36.0;
+const PLOT_LEFT_GUTTER: f32 = 20.0;
 const PLOT_BOTTOM_GUTTER: f32 = 12.0;
 const PLOT_EXPORT_TOP_GUTTER: f32 = 8.0;
+const STATUS_ROW_HEIGHT: f32 = 22.0;
+const STATUS_BOTTOM_INSET: f32 = 15.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AxisDisplay {
@@ -137,7 +142,6 @@ struct ProcessingSettings {
 enum ProcessingScope {
     Current,
     Selected,
-    All,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,7 +250,8 @@ impl XUnitConversion {
 }
 
 struct FitSettings {
-    merge_datasets: bool,
+    scope: FitScope,
+    selected_datasets: Vec<bool>,
     kind: FitKind,
     degree: usize,
     use_x_range: bool,
@@ -261,10 +266,17 @@ struct FitSettings {
     message: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FitScope {
+    Current,
+    Selected,
+}
+
 impl Default for FitSettings {
     fn default() -> Self {
         Self {
-            merge_datasets: false,
+            scope: FitScope::Current,
+            selected_datasets: Vec::new(),
             kind: FitKind::Polynomial,
             degree: 2,
             use_x_range: false,
@@ -552,6 +564,9 @@ impl InstPlotLiteApp {
                     return;
                 }
                 egui::ScrollArea::vertical()
+                    .id_salt("export-window-scroll")
+                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                    .scroll_source(ScrollSource::ALL)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.add_space(10.0);
@@ -578,24 +593,20 @@ impl InstPlotLiteApp {
                                     settings.datasets.fill(false);
                                 }
                             });
-                            egui::ScrollArea::vertical()
-                                .max_height(190.0)
-                                .show(ui, |ui| {
-                                    for (index, name) in dataset_names.iter().enumerate() {
-                                        if let Some(selected) = settings.datasets.get_mut(index) {
-                                            let marker = if index == self.active_dataset {
-                                                "▶ "
-                                            } else {
-                                                ""
-                                            };
-                                            ui.checkbox(
-                                                selected,
-                                                format!("{marker}{}", compact_label(name, 38)),
-                                            )
-                                            .on_hover_text(name);
-                                        }
-                                    }
-                                });
+                            for (index, name) in dataset_names.iter().enumerate() {
+                                if let Some(selected) = settings.datasets.get_mut(index) {
+                                    let marker = if index == self.active_dataset {
+                                        "▶ "
+                                    } else {
+                                        ""
+                                    };
+                                    ui.checkbox(
+                                        selected,
+                                        format!("{marker}{}", compact_label(name, 38)),
+                                    )
+                                    .on_hover_text(name);
+                                }
+                            }
 
                             let selected_count = settings
                                 .datasets
@@ -634,19 +645,11 @@ impl InstPlotLiteApp {
                                         settings.columns.fill(false);
                                     }
                                 });
-                                egui::ScrollArea::vertical()
-                                    .max_height(180.0)
-                                    .show(ui, |ui| {
-                                        for (index, name) in column_names.iter().enumerate() {
-                                            if let Some(selected) = settings.columns.get_mut(index)
-                                            {
-                                                ui.checkbox(
-                                                    selected,
-                                                    format!("{}：{name}", index + 1),
-                                                );
-                                            }
-                                        }
-                                    });
+                                for (index, name) in column_names.iter().enumerate() {
+                                    if let Some(selected) = settings.columns.get_mut(index) {
+                                        ui.checkbox(selected, format!("{}：{name}", index + 1));
+                                    }
+                                }
                                 let selected_columns = settings
                                     .columns
                                     .iter()
@@ -1067,7 +1070,6 @@ impl InstPlotLiteApp {
                 .enumerate()
                 .filter_map(|(index, selected)| selected.then_some(index))
                 .collect(),
-            ProcessingScope::All => (0..self.datasets.len()).collect(),
         };
         if selected.is_empty() {
             self.status = "请至少选择一条曲线".to_owned();
@@ -1220,6 +1222,9 @@ impl InstPlotLiteApp {
                     return;
                 }
                 egui::ScrollArea::vertical()
+                    .id_salt("processing-window-scroll")
+                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                    .scroll_source(ScrollSource::ALL)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                 ui.add_space(12.0);
@@ -1256,11 +1261,6 @@ impl InstPlotLiteApp {
                         ProcessingScope::Selected,
                         "选择曲线",
                     );
-                    ui.selectable_value(
-                        &mut self.processing_settings.scope,
-                        ProcessingScope::All,
-                        "全部曲线",
-                    );
                 });
                 if self.processing_settings.selected_datasets.len() != dataset_names.len() {
                     self.processing_settings.selected_datasets = (0..dataset_names.len())
@@ -1289,7 +1289,7 @@ impl InstPlotLiteApp {
                         self.clamp_columns();
                         self.reset_after_coordinate_change();
                     }
-                } else if self.processing_settings.scope == ProcessingScope::Selected {
+                } else {
                     ui.horizontal(|ui| {
                         if ui.button("全选").clicked() {
                             self.processing_settings.selected_datasets.fill(true);
@@ -1298,16 +1298,12 @@ impl InstPlotLiteApp {
                             self.processing_settings.selected_datasets.fill(false);
                         }
                     });
-                    egui::ScrollArea::vertical().max_height(105.0).show(ui, |ui| {
-                        for (index, name) in dataset_names.iter().enumerate() {
-                            ui.checkbox(
-                                &mut self.processing_settings.selected_datasets[index],
-                                name,
-                            );
-                        }
-                    });
-                } else {
-                    ui.small(format!("将对全部 {} 条曲线应用相同处理。", dataset_names.len()));
+                    for (index, name) in dataset_names.iter().enumerate() {
+                        ui.checkbox(
+                            &mut self.processing_settings.selected_datasets[index],
+                            name,
+                        );
+                    }
                 }
                 ui.label("结果写入方式由上方全局设置决定；批量处理可一次撤销。");
                 ui.separator();
@@ -1557,8 +1553,20 @@ impl InstPlotLiteApp {
             focus_viewport(context, fitting_viewport_id());
             return;
         }
-        let Some(dataset) = self.datasets.get(self.active_dataset) else {
+        if self.datasets.get(self.active_dataset).is_none() {
             self.status = "请先导入数据".to_owned();
+            return;
+        }
+        self.refresh_fit_defaults_from_active_dataset();
+        self.fit_settings.scope = FitScope::Current;
+        self.fit_settings.selected_datasets = (0..self.datasets.len())
+            .map(|index| index == self.active_dataset)
+            .collect();
+        self.fit_open = true;
+    }
+
+    fn refresh_fit_defaults_from_active_dataset(&mut self) {
+        let Some(dataset) = self.datasets.get(self.active_dataset) else {
             return;
         };
         if let Some(range) = dataset
@@ -1589,85 +1597,38 @@ impl InstPlotLiteApp {
         {
             self.fit_settings.unit_conversion = XUnitConversion::DegreesToRadians;
         }
-        self.fit_open = true;
     }
 
-    fn collect_fit_values(&self) -> Result<(Vec<f64>, Vec<f64>), String> {
-        let active = self
+    fn collect_fit_values(
+        &self,
+        dataset_index: usize,
+        x_column: usize,
+        y_column: usize,
+    ) -> Result<(Vec<f64>, Vec<f64>), String> {
+        let dataset = self
             .datasets
-            .get(self.active_dataset)
-            .ok_or_else(|| "请先导入数据".to_owned())?;
-        let x_name = active
-            .columns
-            .get(self.x_column)
-            .map(|column| column.name.as_str())
-            .ok_or_else(|| "当前 X 列不存在".to_owned())?;
-        let y_name = active
-            .columns
-            .get(self.y_column)
-            .map(|column| column.name.as_str())
-            .ok_or_else(|| "当前 Y 列不存在".to_owned())?;
+            .get(dataset_index)
+            .ok_or_else(|| "曲线不存在".to_owned())?;
         let mut x_values = Vec::new();
         let mut y_values = Vec::new();
-        for (dataset_index, dataset) in self.datasets.iter().enumerate() {
-            if !self.fit_settings.merge_datasets && dataset_index != self.active_dataset {
+        for (_, [raw_x, y]) in dataset.row_points(x_column, y_column) {
+            if self.fit_settings.use_x_range
+                && !is_inside_range(raw_x, self.fit_settings.x_min, self.fit_settings.x_max)
+            {
                 continue;
             }
-            let x_column = if dataset_index == self.active_dataset {
-                self.x_column
-            } else if let Some(index) = dataset
-                .columns
-                .iter()
-                .position(|column| column.name == x_name)
+            if self.fit_settings.use_y_range
+                && !is_inside_range(y, self.fit_settings.y_min, self.fit_settings.y_max)
             {
-                index
-            } else {
                 continue;
-            };
-            let y_column = if dataset_index == self.active_dataset {
-                self.y_column
-            } else if let Some(index) = dataset
-                .columns
-                .iter()
-                .position(|column| column.name == y_name)
-            {
-                index
-            } else {
-                continue;
-            };
-            for (_, [raw_x, y]) in dataset.row_points(x_column, y_column) {
-                if self.fit_settings.use_x_range
-                    && !is_inside_range(raw_x, self.fit_settings.x_min, self.fit_settings.x_max)
-                {
-                    continue;
-                }
-                if self.fit_settings.use_y_range
-                    && !is_inside_range(y, self.fit_settings.y_min, self.fit_settings.y_max)
-                {
-                    continue;
-                }
-                let x = self.fit_settings.unit_conversion.convert(raw_x);
-                x_values.push(x);
-                y_values.push(y);
             }
+            x_values.push(self.fit_settings.unit_conversion.convert(raw_x));
+            y_values.push(y);
         }
         if x_values.len() < 2 {
             return Err("筛选后至少需要两个有效数据点".to_owned());
         }
         Ok((x_values, y_values))
-    }
-
-    fn fit_source_dataset_ids(&self, x_name: &str, y_name: &str) -> Vec<String> {
-        self.datasets
-            .iter()
-            .enumerate()
-            .filter(|(dataset_index, dataset)| {
-                (self.fit_settings.merge_datasets || *dataset_index == self.active_dataset)
-                    && dataset.columns.iter().any(|column| column.name == x_name)
-                    && dataset.columns.iter().any(|column| column.name == y_name)
-            })
-            .map(|(_, dataset)| dataset.plot_id.clone())
-            .collect()
     }
 
     fn execute_fit(&mut self) {
@@ -1690,19 +1651,6 @@ impl InstPlotLiteApp {
         else {
             self.fit_settings.message = "拟合失败：当前 Y 列不存在".to_owned();
             return;
-        };
-        let target = FitTarget {
-            dataset_index: (!self.fit_settings.merge_datasets).then_some(self.active_dataset),
-            source_dataset_ids: self.fit_source_dataset_ids(&x_column_name, &y_column_name),
-            x_column_name: x_column_name.clone(),
-            y_column_name: y_column_name.clone(),
-        };
-        let (x, y) = match self.collect_fit_values() {
-            Ok(values) => values,
-            Err(error) => {
-                self.fit_settings.message = format!("拟合失败：{error}");
-                return;
-            }
         };
         let method = match self.fit_settings.kind {
             FitKind::Polynomial => FitMethod::Polynomial {
@@ -1740,48 +1688,109 @@ impl InstPlotLiteApp {
                 }
             }
         };
-        match fitting::fit_values(&x, &y, &method) {
-            Ok(mut result) => {
-                for point in &mut result.points {
-                    point[0] = self.fit_settings.unit_conversion.restore(point[0]);
+        let selected = fit_dataset_indices(
+            self.fit_settings.scope,
+            &self.fit_settings.selected_datasets,
+            self.active_dataset,
+            self.datasets.len(),
+        );
+        if selected.is_empty() {
+            self.fit_settings.message = "拟合失败：请至少选择一条曲线".to_owned();
+            self.status = "拟合失败：请至少选择一条曲线".to_owned();
+            return;
+        }
+
+        let mut pending = Vec::with_capacity(selected.len());
+        let mut summaries = Vec::with_capacity(selected.len());
+        for dataset_index in selected {
+            let Some(dataset) = self.datasets.get(dataset_index) else {
+                continue;
+            };
+            let find_column = |name: &str, active_index: usize| {
+                if dataset_index == self.active_dataset {
+                    return Some(active_index);
                 }
-                let point_count = x.len();
+                let matches = dataset
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, column)| (column.name == name).then_some(index))
+                    .collect::<Vec<_>>();
+                (matches.len() == 1).then_some(matches[0])
+            };
+            let Some(x_column) = find_column(&x_column_name, self.x_column) else {
                 self.fit_settings.message = format!(
-                    "拟合方程：{}\nR² = {:.6}\n使用点数：{point_count}",
-                    result.equation, result.r2
+                    "拟合未执行：{} 的 X 列“{x_column_name}”缺失或重名",
+                    dataset.display_name()
                 );
-                let source_name = self
-                    .datasets
-                    .get(self.active_dataset)
-                    .map(data::DataSet::display_name)
-                    .unwrap_or_else(|| "未命名数据".to_owned());
-                let fit_name = format!(
+                self.status = self.fit_settings.message.clone();
+                return;
+            };
+            let Some(y_column) = find_column(&y_column_name, self.y_column) else {
+                self.fit_settings.message = format!(
+                    "拟合未执行：{} 的 Y 列“{y_column_name}”缺失或重名",
+                    dataset.display_name()
+                );
+                self.status = self.fit_settings.message.clone();
+                return;
+            };
+            let (x, y) = match self.collect_fit_values(dataset_index, x_column, y_column) {
+                Ok(values) => values,
+                Err(error) => {
+                    self.fit_settings.message =
+                        format!("拟合未执行：{}：{error}", dataset.display_name());
+                    self.status = self.fit_settings.message.clone();
+                    return;
+                }
+            };
+            let mut result = match fitting::fit_values(&x, &y, &method) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.fit_settings.message =
+                        format!("拟合未执行：{}：{}", dataset.display_name(), error.reason);
+                    self.status = self.fit_settings.message.clone();
+                    return;
+                }
+            };
+            for point in &mut result.points {
+                point[0] = self.fit_settings.unit_conversion.restore(point[0]);
+            }
+            let source_name = dataset.display_name();
+            let point_count = x.len();
+            summaries.push(format!(
+                "{source_name}：R² = {:.6}，{point_count} 个点，{}",
+                result.r2, result.equation
+            ));
+            pending.push(FitOverlay {
+                points: result.points,
+                r2: result.r2,
+                name: format!(
                     "{source_name} · {x_column_name}/{y_column_name} 拟合 · R²={:.4}",
                     result.r2
-                );
-                let overlay = FitOverlay {
-                    points: result.points,
-                    r2: result.r2,
-                    name: fit_name,
-                    target,
-                };
-                let updated = store_fit_overlay(&mut self.fit_overlays, overlay);
-                self.status = format!(
-                    "拟合完成：R² = {:.6}，使用 {point_count} 个点；{}，当前保留 {} 条拟合曲线",
-                    result.r2,
-                    if updated {
-                        "已更新当前曲线"
-                    } else {
-                        "已添加当前曲线"
-                    },
-                    self.fit_overlays.len()
-                );
-            }
-            Err(error) => {
-                self.fit_settings.message = format!("拟合失败：{}", error.reason);
-                self.status = format!("拟合失败：{}", error.reason);
-            }
+                ),
+                target: FitTarget {
+                    dataset_index: Some(dataset_index),
+                    source_dataset_ids: vec![dataset.plot_id.clone()],
+                    x_column_name: x_column_name.clone(),
+                    y_column_name: y_column_name.clone(),
+                },
+            });
         }
+
+        let fitted_count = pending.len();
+        let (added_count, updated_count) = store_fit_overlays(&mut self.fit_overlays, pending);
+        self.fit_settings.message = if fitted_count == 1 {
+            format!("拟合方程与结果：\n{}", summaries[0])
+        } else {
+            format!(
+                "已分别完成 {fitted_count} 条曲线拟合：\n{}",
+                summaries.join("\n")
+            )
+        };
+        self.status = format!(
+            "拟合完成：分别处理 {fitted_count} 条曲线，新增 {added_count} 条、更新 {updated_count} 条；当前保留 {} 条拟合曲线",
+            self.fit_overlays.len()
+        );
     }
 
     fn show_fit_window(&mut self, context: &egui::Context) {
@@ -1805,6 +1814,9 @@ impl InstPlotLiteApp {
                     return;
                 }
                 egui::ScrollArea::vertical()
+                    .id_salt("fitting-window-scroll")
+                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                    .scroll_source(ScrollSource::ALL)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.add_space(12.0);
@@ -1815,26 +1827,74 @@ impl InstPlotLiteApp {
                             ui.small(
                                 "同一数据集的同一组 X/Y 重新拟合时，会更新原拟合曲线；其他曲线的拟合结果会保留。",
                             );
+                            let dataset_names: Vec<String> = self
+                                .datasets
+                                .iter()
+                                .map(data::DataSet::display_name)
+                                .collect();
                             ui.horizontal(|ui| {
-                                ui.label("数据源");
-                                egui::ComboBox::from_id_salt("fit-source")
-                                    .selected_text(if self.fit_settings.merge_datasets {
-                                        "全部同名列数据（合并）"
-                                    } else {
-                                        "当前数据集"
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut self.fit_settings.merge_datasets,
-                                            false,
-                                            "当前数据集",
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.fit_settings.merge_datasets,
-                                            true,
-                                            "全部同名列数据（合并）",
-                                        );
-                                    });
+                                ui.label("拟合范围：");
+                                ui.selectable_value(
+                                    &mut self.fit_settings.scope,
+                                    FitScope::Current,
+                                    "当前曲线",
+                                );
+                                ui.selectable_value(
+                                    &mut self.fit_settings.scope,
+                                    FitScope::Selected,
+                                    "选择曲线",
+                                );
+                            });
+                            if self.fit_settings.selected_datasets.len() != dataset_names.len() {
+                                self.fit_settings.selected_datasets = (0..dataset_names.len())
+                                    .map(|index| index == self.active_dataset)
+                                    .collect();
+                            }
+                            if self.fit_settings.scope == FitScope::Current {
+                                let previous_dataset = self.active_dataset;
+                                ui.horizontal(|ui| {
+                                    ui.label("当前曲线：");
+                                    egui::ComboBox::from_id_salt("fit-dataset")
+                                        .width(300.0)
+                                        .selected_text(
+                                            dataset_names
+                                                .get(self.active_dataset)
+                                                .map(String::as_str)
+                                                .unwrap_or("未选择"),
+                                        )
+                                        .show_ui(ui, |ui| {
+                                            for (index, name) in dataset_names.iter().enumerate() {
+                                                ui.selectable_value(
+                                                    &mut self.active_dataset,
+                                                    index,
+                                                    name,
+                                                );
+                                            }
+                                        });
+                                });
+                                if self.active_dataset != previous_dataset {
+                                    self.clamp_columns();
+                                    self.reset_after_coordinate_change();
+                                    self.refresh_fit_defaults_from_active_dataset();
+                                }
+                            } else {
+                                ui.horizontal(|ui| {
+                                    if ui.button("全选").clicked() {
+                                        self.fit_settings.selected_datasets.fill(true);
+                                    }
+                                    if ui.button("全不选").clicked() {
+                                        self.fit_settings.selected_datasets.fill(false);
+                                    }
+                                });
+                                for (index, name) in dataset_names.iter().enumerate() {
+                                    ui.checkbox(
+                                        &mut self.fit_settings.selected_datasets[index],
+                                        name,
+                                    );
+                                }
+                                ui.small("所选曲线将分别拟合，不会合并数据点；使用当前 X/Y 列名匹配其他曲线。");
+                            }
+                            ui.horizontal(|ui| {
                                 ui.label("X 单位");
                                 egui::ComboBox::from_id_salt("fit-unit")
                                     .selected_text(unit_conversion_name(
@@ -2236,6 +2296,7 @@ impl eframe::App for InstPlotLiteApp {
             self.load_paths(dropped_paths);
         }
 
+        ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.heading("InstPlot Lite");
             ui.separator();
@@ -2349,19 +2410,9 @@ impl eframe::App for InstPlotLiteApp {
             names
         };
 
-        egui::Panel::bottom("plot-status")
-            .exact_size(34.0)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(&self.status);
-                    if let Some([x, y]) = self.selected_coordinate {
-                        ui.separator();
-                        ui.label(format!("({x}, {y})"));
-                    }
-                });
-            });
-
-        let plot_height = (ui.available_height() - PLOT_BOTTOM_GUTTER).max(220.0);
+        let plot_height =
+            (ui.available_height() - PLOT_BOTTOM_GUTTER - STATUS_ROW_HEIGHT - STATUS_BOTTOM_INSET)
+                .max(220.0);
         let (plot_x_name, plot_y_name) = plot_coordinate_names(
             &self.datasets,
             self.active_dataset,
@@ -2507,7 +2558,9 @@ impl eframe::App for InstPlotLiteApp {
                         );
                     }
                 }
-                for (fit_index, fit) in self.fit_overlays.iter().enumerate() {
+                for (fit_index, fit) in self.fit_overlays.iter().enumerate().filter(|(_, fit)| {
+                    fit_overlay_matches_coordinates(fit, &self.datasets, &plot_x_name, &plot_y_name)
+                }) {
                     let is_active = fit.target.dataset_index == Some(self.active_dataset);
                     plot_ui.line(
                         Line::new(legend_series_name(&fit.name, is_active), fit.points.clone())
@@ -2522,6 +2575,36 @@ impl eframe::App for InstPlotLiteApp {
             plot_row.response.rect.min - egui::vec2(0.0, PLOT_EXPORT_TOP_GUTTER),
             plot_row.response.rect.max + egui::vec2(0.0, PLOT_BOTTOM_GUTTER),
         ));
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), STATUS_ROW_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Min),
+            |ui| {
+                ui.spacing_mut().interact_size.y = 20.0;
+                let coordinate = self.selected_coordinate.map(|[x, y]| format!("({x}, {y})"));
+                let reserved_width = coordinate.as_ref().map_or(0.0, |text| {
+                    let font_id = egui::TextStyle::Body.resolve(ui.style());
+                    ui.painter()
+                        .layout_no_wrap(text.clone(), font_id, ui.visuals().text_color())
+                        .size()
+                        .x
+                        + 26.0
+                });
+                let status_width = (ui.available_width() - reserved_width).max(0.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(status_width, 20.0),
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| {
+                        ui.add(egui::Label::new(&self.status).truncate())
+                            .on_hover_text(&self.status);
+                    },
+                );
+                if let Some(coordinate) = coordinate {
+                    ui.separator();
+                    ui.label(coordinate);
+                }
+            },
+        );
+        ui.add_space(STATUS_BOTTOM_INSET);
         let response = plot_row.inner;
         self.last_plot_rect = Some(response.response.rect);
         let bounds = response.transform.bounds();
@@ -2867,6 +2950,7 @@ fn configure_interface_style(context: &egui::Context) {
         );
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
         style.spacing.interact_size.y = 32.0;
+        style.spacing.scroll = egui::style::ScrollStyle::thin();
         style.visuals.selection.bg_fill = Color32::from_gray(78);
         style.visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
         style.visuals.hyperlink_color = Color32::from_gray(210);
@@ -3121,12 +3205,71 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
     }
 }
 
+fn store_fit_overlays(
+    overlays: &mut Vec<FitOverlay>,
+    pending: impl IntoIterator<Item = FitOverlay>,
+) -> (usize, usize) {
+    let mut added = 0;
+    let mut updated = 0;
+    for overlay in pending {
+        if store_fit_overlay(overlays, overlay) {
+            updated += 1;
+        } else {
+            added += 1;
+        }
+    }
+    (added, updated)
+}
+
+fn fit_dataset_indices(
+    scope: FitScope,
+    selected_datasets: &[bool],
+    active_dataset: usize,
+    dataset_count: usize,
+) -> Vec<usize> {
+    match scope {
+        FitScope::Current => (active_dataset < dataset_count)
+            .then_some(active_dataset)
+            .into_iter()
+            .collect(),
+        FitScope::Selected => selected_datasets
+            .iter()
+            .take(dataset_count)
+            .enumerate()
+            .filter_map(|(index, selected)| selected.then_some(index))
+            .collect(),
+    }
+}
+
+fn fit_overlay_matches_coordinates(
+    fit: &FitOverlay,
+    datasets: &[data::DataSet],
+    x_name: &str,
+    y_name: &str,
+) -> bool {
+    if fit.target.x_column_name == x_name && fit.target.y_column_name == y_name {
+        return true;
+    }
+    let Some(dataset) = fit
+        .target
+        .dataset_index
+        .and_then(|index| datasets.get(index))
+    else {
+        return false;
+    };
+    dataset
+        .fit_link
+        .as_ref()
+        .is_some_and(|link| link.source_x_column == x_name && link.source_y_column == y_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style,
-        dataset_plot_columns, demo_curve, format_axis_decimal, is_inside_range, legend_series_name,
-        plot_coordinate_names, preferred_import_columns, sole_selected_index, store_fit_overlay,
+        AxisDisplay, FitOverlay, FitScope, FitTarget, compact_label, configure_interface_style,
+        dataset_plot_columns, demo_curve, fit_dataset_indices, fit_overlay_matches_coordinates,
+        format_axis_decimal, is_inside_range, legend_series_name, plot_coordinate_names,
+        preferred_import_columns, sole_selected_index, store_fit_overlay, store_fit_overlays,
         synchronize_selection, wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
@@ -3352,6 +3495,23 @@ mod tests {
             dataset_plot_columns(&datasets, 0, 1, "Theta", "2-X"),
             Some((0, 1))
         );
+        let refitted_import = FitOverlay {
+            points: vec![[0.0, 1.0]],
+            r2: 0.99,
+            name: "refitted import".to_owned(),
+            target: FitTarget {
+                dataset_index: Some(1),
+                source_dataset_ids: vec!["fit-id".to_owned()],
+                x_column_name: "X".to_owned(),
+                y_column_name: "拟合 Y".to_owned(),
+            },
+        };
+        assert!(fit_overlay_matches_coordinates(
+            &refitted_import,
+            &datasets,
+            "Theta",
+            "2-X"
+        ));
     }
 
     #[test]
@@ -3394,5 +3554,72 @@ mod tests {
         assert_eq!(overlays.len(), 2);
         assert_eq!(overlays[0].name, "new");
         assert_eq!(overlays[1].name, "other");
+    }
+
+    #[test]
+    fn fitting_selection_never_merges_or_implicitly_adds_other_curves() {
+        assert_eq!(
+            fit_dataset_indices(FitScope::Current, &[true, true, true], 1, 3),
+            vec![1]
+        );
+        assert_eq!(
+            fit_dataset_indices(FitScope::Selected, &[true, false, true], 1, 3),
+            vec![0, 2]
+        );
+        assert!(fit_dataset_indices(FitScope::Selected, &[false; 3], 1, 3).is_empty());
+    }
+
+    #[test]
+    fn fitted_overlay_only_appears_on_its_source_coordinate_pair() {
+        let fit = FitOverlay {
+            points: vec![[0.0, 1.0]],
+            r2: 1.0,
+            name: "fit".to_owned(),
+            target: FitTarget {
+                dataset_index: Some(0),
+                source_dataset_ids: vec!["source-0".to_owned()],
+                x_column_name: "time".to_owned(),
+                y_column_name: "temperature".to_owned(),
+            },
+        };
+        assert!(fit_overlay_matches_coordinates(
+            &fit,
+            &[],
+            "time",
+            "temperature"
+        ));
+        assert!(!fit_overlay_matches_coordinates(
+            &fit,
+            &[],
+            "time",
+            "magnetic field"
+        ));
+    }
+
+    #[test]
+    fn batch_fit_results_update_each_target_without_collapsing_curves() {
+        let make_overlay = |dataset_index: usize, source_id: &str, r2: f64| FitOverlay {
+            points: vec![[0.0, r2]],
+            r2,
+            name: format!("fit-{source_id}"),
+            target: FitTarget {
+                dataset_index: Some(dataset_index),
+                source_dataset_ids: vec![source_id.to_owned()],
+                x_column_name: "x".to_owned(),
+                y_column_name: "y".to_owned(),
+            },
+        };
+        let mut overlays = vec![make_overlay(0, "source-0", 0.5)];
+        let (added, updated) = store_fit_overlays(
+            &mut overlays,
+            [
+                make_overlay(0, "source-0", 0.9),
+                make_overlay(1, "source-1", 0.8),
+            ],
+        );
+        assert_eq!((added, updated), (1, 1));
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].r2, 0.9);
+        assert_eq!(overlays[1].target.source_dataset_ids, ["source-1"]);
     }
 }
