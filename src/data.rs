@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -351,6 +352,7 @@ fn read_spreadsheet(path: &Path) -> Result<Vec<DataSet>, ImportError> {
             "工作簿中没有包含至少两个数值列的工作表",
         ));
     }
+    validate_unique_source_plot_ids(&datasets)?;
     Ok(datasets)
 }
 
@@ -379,14 +381,21 @@ fn spreadsheet_range_to_dataset(
         })
         .ok_or_else(|| ImportError::new("no_numeric_data", "未找到至少两列数值数据"))?;
 
-    let matching_header_position = (0..data_position).rev().find(|position| {
+    let mut data_start_position = data_position;
+    while data_start_position > 0
+        && spreadsheet_partial_numeric_row(rows[data_start_position - 1], column_count)
+    {
+        data_start_position -= 1;
+    }
+
+    let matching_header_position = (0..data_start_position).rev().find(|position| {
         let row = rows[*position];
         spreadsheet_row_width(row) == column_count
             && row[..column_count]
                 .iter()
                 .any(|cell| !cell.is_empty() && spreadsheet_number(cell).is_none())
     });
-    let adjacent_header_position = data_position.checked_sub(1).filter(|position| {
+    let adjacent_header_position = data_start_position.checked_sub(1).filter(|position| {
         let row = rows[*position];
         spreadsheet_row_width(row) >= 2
             && row
@@ -395,7 +404,7 @@ fn spreadsheet_range_to_dataset(
                 .any(|cell| !cell.is_empty() && spreadsheet_number(cell).is_none())
     });
     let header_position = matching_header_position.or(adjacent_header_position);
-    let headers = header_position.map_or_else(
+    let headers = unique_column_names(header_position.map_or_else(
         || {
             (1..=column_count)
                 .map(|index| format!("Column {index}"))
@@ -415,11 +424,11 @@ fn spreadsheet_range_to_dataset(
                 })
                 .collect()
         },
-    );
+    ));
 
     let mut values = vec![Vec::new(); column_count];
     let mut numeric_counts = vec![0_usize; column_count];
-    for (row_index, row) in rows.iter().enumerate().skip(data_position) {
+    for (row_index, row) in rows.iter().enumerate().skip(data_start_position) {
         let width = spreadsheet_row_width(row);
         if width > column_count {
             return Err(ImportError::at_line(
@@ -458,9 +467,13 @@ fn spreadsheet_range_to_dataset(
         ));
     }
 
-    let kind = spreadsheet_dataset_kind(&rows[..data_position])?;
-    let (stored_plot_id, fit_link) = spreadsheet_plot_metadata(&rows[..data_position], kind)?;
-    let plot_id = stored_plot_id.unwrap_or_else(|| generated_plot_id(path, &columns));
+    let kind = spreadsheet_dataset_kind(&rows[..data_start_position])?;
+    let (stored_plot_id, fit_link) = spreadsheet_plot_metadata(&rows[..data_start_position], kind)?;
+    let plot_id = stored_plot_id.unwrap_or_else(|| {
+        let mut sheet_identity = path.as_os_str().to_os_string();
+        sheet_identity.push(format!("#{sheet_name}"));
+        generated_plot_id(Path::new(&sheet_identity), &columns)
+    });
     Ok(DataSet {
         source: path.to_path_buf(),
         label: None,
@@ -483,6 +496,18 @@ fn spreadsheet_row_width(row: &[Data]) -> usize {
 
 fn spreadsheet_finite_number(cell: &Data) -> Option<f64> {
     spreadsheet_number(cell).filter(|number| number.is_finite())
+}
+
+fn spreadsheet_partial_numeric_row(row: &[Data], column_count: usize) -> bool {
+    let width = spreadsheet_row_width(row);
+    width > 0
+        && width <= column_count
+        && row[..width]
+            .iter()
+            .all(|cell| cell.is_empty() || spreadsheet_number(cell).is_some())
+        && row[..width]
+            .iter()
+            .any(|cell| spreadsheet_finite_number(cell).is_some())
 }
 
 fn spreadsheet_number(cell: &Data) -> Option<f64> {
@@ -739,7 +764,27 @@ fn parse_text_datasets(
             "文件包含 InstPlot 分区标记，但没有可读取的数据区",
         ));
     }
+    validate_unique_source_plot_ids(&datasets)?;
     Ok(datasets)
+}
+
+fn validate_unique_source_plot_ids(datasets: &[DataSet]) -> Result<(), ImportError> {
+    let mut source_ids = HashSet::new();
+    for dataset in datasets
+        .iter()
+        .filter(|dataset| dataset.kind == DataSetKind::Source)
+    {
+        if !source_ids.insert(dataset.plot_id.as_str()) {
+            return Err(ImportError::new(
+                "duplicate_dataset_id",
+                format!(
+                    "同一文件中有多个原始数据区使用 Dataset-ID“{}”；为防止拟合关联错误，未导入",
+                    dataset.plot_id
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn decode_text(bytes: &[u8]) -> Result<(String, String), ImportError> {
@@ -812,7 +857,18 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
         })
         .ok_or_else(|| ImportError::new("no_numeric_data", "未找到至少两列数值数据"))?;
 
-    let matching_header_position = (0..data_position).rev().find(|position| {
+    let mut data_start_position = data_position;
+    while data_start_position > 0
+        && text_partial_numeric_row(
+            significant[data_start_position - 1].1,
+            separator,
+            detected_column_count,
+        )
+    {
+        data_start_position -= 1;
+    }
+
+    let matching_header_position = (0..data_start_position).rev().find(|position| {
         split_fields(significant[*position].1, separator)
             .map(|mut fields| {
                 trim_excess_trailing_empty_fields(&mut fields, detected_column_count);
@@ -821,13 +877,12 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
             })
             .unwrap_or(false)
     });
-    let adjacent_header_position = data_position.checked_sub(1).filter(|position| {
+    let adjacent_header_position = data_start_position.checked_sub(1).filter(|position| {
         split_fields(significant[*position].1, separator)
             .map(|fields| fields.len() >= 2 && fields.iter().any(|field| !is_number(field)))
             .unwrap_or(false)
     });
     let header_position = matching_header_position.or(adjacent_header_position);
-    let data_start_position = data_position;
     let (headers, column_count): (Vec<String>, usize) = if let Some(position) = header_position {
         let mut fields = split_fields(significant[position].1, separator)?;
         trim_excess_trailing_empty_fields(&mut fields, detected_column_count);
@@ -848,6 +903,7 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
         )
     };
 
+    let headers = unique_column_names(headers);
     let mut values = vec![Vec::new(); column_count];
     let mut numeric_counts = vec![0_usize; column_count];
     for (physical_line, line) in significant.iter().skip(data_start_position) {
@@ -930,6 +986,20 @@ fn numeric_row(line: &str) -> Option<(Separator, usize)> {
     })
 }
 
+fn text_partial_numeric_row(line: &str, separator: Separator, column_count: usize) -> bool {
+    let Ok(mut fields) = split_fields(line, separator) else {
+        return false;
+    };
+    trim_excess_trailing_empty_fields(&mut fields, column_count);
+    fields.len() == column_count
+        && fields
+            .iter()
+            .all(|field| field.is_empty() || is_number(field))
+        && fields
+            .iter()
+            .any(|field| parse_number(field).is_some_and(f64::is_finite))
+}
+
 fn split_fields(line: &str, separator: Separator) -> Result<Vec<String>, ImportError> {
     if separator == Separator::Whitespace {
         return Ok(line.split_whitespace().map(str::to_owned).collect());
@@ -982,6 +1052,26 @@ fn clean_header(header: &str) -> String {
     header.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn unique_column_names(headers: Vec<String>) -> Vec<String> {
+    let mut used = HashSet::new();
+    headers
+        .into_iter()
+        .map(|name| {
+            if used.insert(name.clone()) {
+                return name;
+            }
+            let mut duplicate_number = 2;
+            loop {
+                let candidate = format!("{name} [{duplicate_number}]");
+                if used.insert(candidate.clone()) {
+                    return candidate;
+                }
+                duplicate_number += 1;
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DataSetKind, ImportError, read_data_bytes, read_data_file};
@@ -1023,6 +1113,19 @@ mod tests {
         assert_eq!(datasets[1].kind, DataSetKind::Fit);
         assert_eq!(datasets[0].columns[1].values, [2.0, 4.0]);
         assert_eq!(datasets[1].columns[1].values, [2.1, 3.9]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sectioned_file_rejects_duplicate_source_dataset_ids() {
+        let path = temporary_path("duplicate-dataset-id.csv");
+        std::fs::write(
+            &path,
+            b"# -----BEGIN INSTPLOT DATA-----\n# Type: source\n# Dataset-ID: repeated\nx,y\n1,2\n# -----END INSTPLOT DATA-----\n# -----BEGIN INSTPLOT DATA-----\n# Type: source\n# Dataset-ID: repeated\nx,y\n3,4\n# -----END INSTPLOT DATA-----\n",
+        )
+        .unwrap();
+        let error = read_data_file(&path).unwrap_err();
+        assert_eq!(error.code, "duplicate_dataset_id");
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1122,6 +1225,26 @@ mod tests {
         assert_eq!(datasets.len(), 2);
         assert!(datasets[0].display_name().contains("Forward"));
         assert!(datasets[1].display_name().contains("Reverse"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spreadsheet_import_keeps_leading_row_with_a_missing_value() {
+        let path = temporary_path("leading-empty.xlsx");
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.write_string(0, 0, "x").unwrap();
+        sheet.write_string(0, 1, "y").unwrap();
+        sheet.write_number(1, 0, 1.0).unwrap();
+        sheet.write_number(2, 0, 2.0).unwrap();
+        sheet.write_number(2, 1, 3.0).unwrap();
+        workbook.save(&path).unwrap();
+
+        let datasets = read_data_file(&path).unwrap();
+        assert_eq!(datasets[0].row_count, 2);
+        assert_eq!(datasets[0].columns[0].values, [1.0, 2.0]);
+        assert!(datasets[0].columns[1].values[0].is_nan());
+        assert_eq!(datasets[0].columns[1].values[1], 3.0);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1253,6 +1376,28 @@ mod tests {
         assert_eq!(data.columns[0].name, "index");
         assert_eq!(data.columns[1].name, "timestamp");
         assert_eq!(data.columns[2].name, "signal");
+    }
+
+    #[test]
+    fn text_import_keeps_leading_row_with_a_missing_value() {
+        let data = parse(b"x,y\n1,\n2,3\n").unwrap();
+        assert_eq!(data.row_count, 2);
+        assert_eq!(data.columns[0].values, [1.0, 2.0]);
+        assert!(data.columns[1].values[0].is_nan());
+        assert_eq!(data.columns[1].values[1], 3.0);
+    }
+
+    #[test]
+    fn duplicate_headers_are_made_unique() {
+        let data = parse(b"x,x,y\n1,10,2\n2,20,4\n").unwrap();
+        assert_eq!(
+            data.columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            ["x", "x [2]", "y"]
+        );
+        assert_eq!(data.columns[1].values, [10.0, 20.0]);
     }
 
     #[test]

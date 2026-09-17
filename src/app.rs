@@ -288,6 +288,7 @@ struct FitOverlay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FitTarget {
     dataset_index: Option<usize>,
+    source_dataset_ids: Vec<String>,
     x_column_name: String,
     y_column_name: String,
 }
@@ -412,6 +413,20 @@ impl InstPlotLiteApp {
         for path in paths {
             match data::read_data_file(&path) {
                 Ok(datasets) => {
+                    if let Some(dataset) = datasets.iter().find(|candidate| {
+                        candidate.kind == data::DataSetKind::Source
+                            && self.datasets.iter().any(|existing| {
+                                existing.kind == data::DataSetKind::Source
+                                    && existing.plot_id == candidate.plot_id
+                            })
+                    }) {
+                        errors.push(format!(
+                            "{}：原始数据 Dataset-ID“{}”已在当前会话中使用；为防止拟合关联错误，未重复导入",
+                            path.display(),
+                            dataset.plot_id
+                        ));
+                        continue;
+                    }
                     loaded_files += 1;
                     loaded_datasets += datasets.len();
                     if let Some(dataset) = datasets.last() {
@@ -692,6 +707,10 @@ impl InstPlotLiteApp {
             self.status = "请至少选择一个数据集".to_owned();
             return;
         }
+        if let Err(error) = self.validate_fit_export_scope(&indices, settings.layout) {
+            self.status = format!("数据导出失败：{error}");
+            return;
+        }
         if indices.len() == 1 {
             let index = indices[0];
             let dataset = &self.datasets[index];
@@ -779,20 +798,13 @@ impl InstPlotLiteApp {
         let fits = self
             .fit_overlays
             .iter()
-            .filter(|fit| {
-                fit.target
-                    .dataset_index
-                    .is_none_or(|index| indices.contains(&index))
-            })
+            .filter(|fit| self.fit_is_fully_selected(fit, &indices))
             .map(|fit| data_export::FitCurveExport {
                 name: &fit.name,
                 points: &fit.points,
                 r_squared: fit.r2,
-                parent_dataset_id: fit
-                    .target
-                    .dataset_index
-                    .and_then(|index| self.datasets.get(index))
-                    .map(|dataset| dataset.plot_id.as_str()),
+                parent_dataset_id: (fit.target.source_dataset_ids.len() == 1)
+                    .then(|| fit.target.source_dataset_ids[0].as_str()),
                 source_x_column: &fit.target.x_column_name,
                 source_y_column: &fit.target.y_column_name,
             })
@@ -818,26 +830,65 @@ impl InstPlotLiteApp {
         &self,
         dataset_index: usize,
     ) -> Vec<data_export::FitCurveExport<'_>> {
+        let Some(dataset) = self.datasets.get(dataset_index) else {
+            return Vec::new();
+        };
         self.fit_overlays
             .iter()
             .filter(|fit| {
-                fit.target
-                    .dataset_index
-                    .is_none_or(|target_index| target_index == dataset_index)
+                fit.target.source_dataset_ids.len() == 1
+                    && fit.target.source_dataset_ids[0] == dataset.plot_id
             })
             .map(|fit| data_export::FitCurveExport {
                 name: &fit.name,
                 points: &fit.points,
                 r_squared: fit.r2,
-                parent_dataset_id: fit
-                    .target
-                    .dataset_index
-                    .and_then(|index| self.datasets.get(index))
-                    .map(|dataset| dataset.plot_id.as_str()),
+                parent_dataset_id: Some(fit.target.source_dataset_ids[0].as_str()),
                 source_x_column: &fit.target.x_column_name,
                 source_y_column: &fit.target.y_column_name,
             })
             .collect()
+    }
+
+    fn fit_is_fully_selected(&self, fit: &FitOverlay, selected_indices: &[usize]) -> bool {
+        fit.target.source_dataset_ids.iter().all(|source_id| {
+            selected_indices
+                .iter()
+                .filter_map(|index| self.datasets.get(*index))
+                .any(|dataset| dataset.plot_id == *source_id)
+        })
+    }
+
+    fn validate_fit_export_scope(
+        &self,
+        selected_indices: &[usize],
+        layout: ExportLayout,
+    ) -> Result<(), String> {
+        for fit in self
+            .fit_overlays
+            .iter()
+            .filter(|fit| fit.target.source_dataset_ids.len() > 1)
+        {
+            let any_source_selected = fit.target.source_dataset_ids.iter().any(|source_id| {
+                selected_indices
+                    .iter()
+                    .filter_map(|index| self.datasets.get(*index))
+                    .any(|dataset| dataset.plot_id == *source_id)
+            });
+            if any_source_selected && !self.fit_is_fully_selected(fit, selected_indices) {
+                return Err(format!(
+                    "合并拟合“{}”必须与全部参与的原始曲线一起导出",
+                    fit.name
+                ));
+            }
+            if any_source_selected && layout == ExportLayout::Separate {
+                return Err(format!(
+                    "合并拟合“{}”跨多条曲线，请选择“导出到同一个文件”以保留其来源",
+                    fit.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn request_plot_png(&mut self, context: &egui::Context) {
@@ -1581,19 +1632,17 @@ impl InstPlotLiteApp {
                 continue;
             };
             for (_, [raw_x, y]) in dataset.row_points(x_column, y_column) {
-                let x = self.fit_settings.unit_conversion.convert(raw_x);
                 if self.fit_settings.use_x_range
-                    && (x < self.fit_settings.x_min.min(self.fit_settings.x_max)
-                        || x > self.fit_settings.x_min.max(self.fit_settings.x_max))
+                    && !is_inside_range(raw_x, self.fit_settings.x_min, self.fit_settings.x_max)
                 {
                     continue;
                 }
                 if self.fit_settings.use_y_range
-                    && (y < self.fit_settings.y_min.min(self.fit_settings.y_max)
-                        || y > self.fit_settings.y_min.max(self.fit_settings.y_max))
+                    && !is_inside_range(y, self.fit_settings.y_min, self.fit_settings.y_max)
                 {
                     continue;
                 }
+                let x = self.fit_settings.unit_conversion.convert(raw_x);
                 x_values.push(x);
                 y_values.push(y);
             }
@@ -1602,6 +1651,19 @@ impl InstPlotLiteApp {
             return Err("筛选后至少需要两个有效数据点".to_owned());
         }
         Ok((x_values, y_values))
+    }
+
+    fn fit_source_dataset_ids(&self, x_name: &str, y_name: &str) -> Vec<String> {
+        self.datasets
+            .iter()
+            .enumerate()
+            .filter(|(dataset_index, dataset)| {
+                (self.fit_settings.merge_datasets || *dataset_index == self.active_dataset)
+                    && dataset.columns.iter().any(|column| column.name == x_name)
+                    && dataset.columns.iter().any(|column| column.name == y_name)
+            })
+            .map(|(_, dataset)| dataset.plot_id.clone())
+            .collect()
     }
 
     fn execute_fit(&mut self) {
@@ -1627,6 +1689,7 @@ impl InstPlotLiteApp {
         };
         let target = FitTarget {
             dataset_index: (!self.fit_settings.merge_datasets).then_some(self.active_dataset),
+            source_dataset_ids: self.fit_source_dataset_ids(&x_column_name, &y_column_name),
             x_column_name: x_column_name.clone(),
             y_column_name: y_column_name.clone(),
         };
@@ -2532,6 +2595,10 @@ impl eframe::App for InstPlotLiteApp {
     }
 }
 
+fn is_inside_range(value: f64, first: f64, second: f64) -> bool {
+    value >= first.min(second) && value <= first.max(second)
+}
+
 fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
     let mut minimum = f64::INFINITY;
     let mut maximum = f64::NEG_INFINITY;
@@ -3012,7 +3079,7 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
 mod tests {
     use super::{
         AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style,
-        dataset_plot_columns, demo_curve, format_axis_decimal, legend_series_name,
+        dataset_plot_columns, demo_curve, format_axis_decimal, is_inside_range, legend_series_name,
         plot_coordinate_names, preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
@@ -3111,6 +3178,14 @@ mod tests {
     }
 
     #[test]
+    fn degree_fit_limits_are_checked_in_the_original_axis_units() {
+        // The fit window presents 30–60 when the source axis is degrees; it
+        // must not compare those values against the converted radian inputs.
+        assert!(is_inside_range(45.0, 30.0, 60.0));
+        assert!(!is_inside_range(45.0_f64.to_radians(), 30.0, 60.0));
+    }
+
+    #[test]
     fn imported_fit_uses_its_source_axes_and_overlays_the_parent_curve() {
         let source = DataSet {
             source: PathBuf::from("source.csv"),
@@ -3190,11 +3265,13 @@ mod tests {
     fn refitting_the_same_curve_replaces_only_its_previous_fit() {
         let target = FitTarget {
             dataset_index: Some(0),
+            source_dataset_ids: vec!["source-0".to_owned()],
             x_column_name: "x".to_owned(),
             y_column_name: "y".to_owned(),
         };
         let other_target = FitTarget {
             dataset_index: Some(1),
+            source_dataset_ids: vec!["source-1".to_owned()],
             x_column_name: "x".to_owned(),
             y_column_name: "y".to_owned(),
         };
