@@ -2304,14 +2304,12 @@ impl InstPlotLiteApp {
                             .on_hover_text(format!("完整精度：{precise_equation}"));
                         if let Some(parameters) = parameters {
                             ui.add_space(5.0);
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(parameters).small()).wrap(),
-                            )
-                            .on_hover_text(format!("完整精度：{precise_equation}"));
+                            ui.add(egui::Label::new(parameters).wrap())
+                                .on_hover_text(format!("完整精度：{precise_equation}"));
                         }
                         if let Some(r2) = r2 {
                             ui.add_space(5.0);
-                            ui.small(format!("R² = {r2:.6}"));
+                            ui.label(format!("R² = {r2:.6}"));
                         }
                     }
                 });
