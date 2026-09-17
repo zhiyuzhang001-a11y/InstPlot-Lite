@@ -3,7 +3,7 @@
 Updated: 2026-09-17
 
 > [!NOTE]
-> InstPlot Lite is now the current user-facing product. The v0.3.1 unsigned
+> InstPlot Lite is now the current user-facing product. The v0.3.2 unsigned
 > preview contains the core workflow plus formula calculation, multi-curve
 > processing, explicit export-column selection, and reversible overwrite or
 > retain processing results.
@@ -149,6 +149,9 @@ curve or several selected curves (including Select All), with a window-wide
 overwrite or retain-derived-columns policy. The denoising implementation reuses fixed
 convolution weights in the interior rather than fitting a new polynomial for
 every row. Current-dataset data export also offers explicit column selection.
+Fitted curves retain both a compact two-decimal display equation and a
+higher-precision exported equation. Text and workbook round trips restore the
+formula metadata, coefficients, R² values, and source-axis relationship.
 
 The complete source history is merged into `main`. GitHub CI builds and
 validates the Windows x64 installer, macOS arm64 DMG, Linux amd64 DEB, and
@@ -159,7 +162,7 @@ same installation lifecycle; the macOS DMG passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the
-[v0.3.1 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.1),
+[v0.3.2 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.2),
 together with a five-entry SHA-256 checksum manifest. The release is
 intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
@@ -168,7 +171,7 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.3.1 preview release is complete. Stable-release promotion still
+The unsigned v0.3.2 preview release is complete. Stable-release promotion still
 requires release-owner credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.

@@ -22,6 +22,8 @@ pub struct FitLink {
     pub parent_dataset_id: Option<String>,
     pub source_x_column: String,
     pub source_y_column: String,
+    pub equation: Option<String>,
+    pub display_equation: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -566,6 +568,8 @@ fn spreadsheet_plot_metadata(
     let mut parent_id = None;
     let mut source_x = None;
     let mut source_y = None;
+    let mut equation = None;
+    let mut display_equation = None;
     for row in metadata_rows {
         let Some(text) = row.first().map(spreadsheet_cell_text) else {
             continue;
@@ -582,6 +586,8 @@ fn spreadsheet_plot_metadata(
         parent_id = value("# Parent-ID:").or(parent_id);
         source_x = value("# Source-X:").or(source_x);
         source_y = value("# Source-Y:").or(source_y);
+        equation = value("# Equation:").or(equation);
+        display_equation = value("# Display-Equation:").or(display_equation);
     }
     let fit_link = match (parent_id, source_x, source_y) {
         (None, None, None) => None,
@@ -592,6 +598,8 @@ fn spreadsheet_plot_metadata(
                 parent_dataset_id: (parent != "*").then_some(parent),
                 source_x_column,
                 source_y_column,
+                equation,
+                display_equation,
             })
         }
         _ => {
@@ -634,6 +642,8 @@ fn parse_text_datasets(
     let mut section_parent_id = None::<String>;
     let mut section_source_x = None::<String>;
     let mut section_source_y = None::<String>;
+    let mut section_equation = None::<String>;
+    let mut section_display_equation = None::<String>;
     let mut section_lines = Vec::<&str>::new();
     let mut section_start = 0_usize;
 
@@ -653,6 +663,8 @@ fn parse_text_datasets(
             section_parent_id = None;
             section_source_x = None;
             section_source_y = None;
+            section_equation = None;
+            section_display_equation = None;
             section_lines.clear();
             section_start = line_index + 1;
             continue;
@@ -690,6 +702,8 @@ fn parse_text_datasets(
                         parent_dataset_id: (parent != "*").then_some(parent),
                         source_x_column,
                         source_y_column,
+                        equation: section_equation.take(),
+                        display_equation: section_display_equation.take(),
                     })
                 }
                 _ => {
@@ -740,6 +754,16 @@ fn parse_text_datasets(
                 let value = value.trim();
                 if !value.is_empty() {
                     section_source_y = Some(value.to_owned());
+                }
+            } else if let Some(value) = trimmed.strip_prefix("# Equation:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_equation = Some(value.to_owned());
+                }
+            } else if let Some(value) = trimmed.strip_prefix("# Display-Equation:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_display_equation = Some(value.to_owned());
                 }
             } else {
                 section_lines.push(line);

@@ -296,6 +296,8 @@ impl Default for FitSettings {
 struct FitOverlay {
     points: Vec<[f64; 2]>,
     r2: f64,
+    equation: String,
+    display_equation: String,
     name: String,
     target: FitTarget,
 }
@@ -808,6 +810,8 @@ impl InstPlotLiteApp {
             .filter(|fit| self.fit_is_fully_selected(fit, &indices))
             .map(|fit| data_export::FitCurveExport {
                 name: &fit.name,
+                equation: &fit.equation,
+                display_equation: &fit.display_equation,
                 points: &fit.points,
                 r_squared: fit.r2,
                 parent_dataset_id: (fit.target.source_dataset_ids.len() == 1)
@@ -848,6 +852,8 @@ impl InstPlotLiteApp {
             })
             .map(|fit| data_export::FitCurveExport {
                 name: &fit.name,
+                equation: &fit.equation,
+                display_equation: &fit.display_equation,
                 points: &fit.points,
                 r_squared: fit.r2,
                 parent_dataset_id: Some(fit.target.source_dataset_ids[0].as_str()),
@@ -1764,6 +1770,8 @@ impl InstPlotLiteApp {
             pending.push(FitOverlay {
                 points: result.points,
                 r2: result.r2,
+                equation: result.equation,
+                display_equation: result.display_equation,
                 name: format!(
                     "{source_name} · {x_column_name}/{y_column_name} 拟合 · R²={:.4}",
                     result.r2
@@ -2063,6 +2071,60 @@ impl InstPlotLiteApp {
         (longest_label + COMBO_DECORATION_WIDTH).clamp(MIN_WIDTH, MAX_WIDTH)
     }
 
+    fn active_fit_details(&self) -> Vec<(String, String, Option<f64>)> {
+        let Some(dataset) = self.datasets.get(self.active_dataset) else {
+            return Vec::new();
+        };
+        let mut details = Vec::new();
+        if let Some(link) = dataset.fit_link.as_ref() {
+            let display_equation = link.display_equation.as_ref().or(link.equation.as_ref());
+            let precise_equation = link.equation.as_ref().or(display_equation);
+            let r2 = dataset
+                .columns
+                .iter()
+                .find(|column| column.name == "R²")
+                .and_then(|column| {
+                    column
+                        .values
+                        .iter()
+                        .copied()
+                        .find(|value| value.is_finite())
+                });
+            if let (Some(display_equation), Some(precise_equation)) =
+                (display_equation, precise_equation)
+            {
+                details.push((display_equation.clone(), precise_equation.clone(), r2));
+            }
+        }
+
+        let x_name = dataset
+            .columns
+            .get(self.x_column)
+            .map(|column| &column.name);
+        let y_name = dataset
+            .columns
+            .get(self.y_column)
+            .map(|column| &column.name);
+        details.extend(self.fit_overlays.iter().filter_map(|fit| {
+            let belongs_to_active = fit
+                .target
+                .source_dataset_ids
+                .iter()
+                .any(|source_id| source_id == &dataset.plot_id);
+            (belongs_to_active
+                && x_name == Some(&fit.target.x_column_name)
+                && y_name == Some(&fit.target.y_column_name))
+            .then(|| {
+                (
+                    fit.display_equation.clone(),
+                    fit.equation.clone(),
+                    Some(fit.r2),
+                )
+            })
+        }));
+        details
+    }
+
     fn show_data_controls(&mut self, ui: &mut egui::Ui, vertical: bool) -> Vec<String> {
         if self.datasets.is_empty() {
             ui.label("尚未导入数据");
@@ -2211,6 +2273,19 @@ impl InstPlotLiteApp {
                 .map(String::as_str)
                 .unwrap_or("未选择");
             self.status = format!("已切换坐标：X = {x_name}，Y = {y_name}");
+        }
+        let fit_details = self.active_fit_details();
+        if !fit_details.is_empty() {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong("拟合结果");
+            for (display_equation, precise_equation, r2) in fit_details {
+                ui.add(egui::Label::new(display_equation).wrap())
+                    .on_hover_text(format!("完整精度：{precise_equation}"));
+                if let Some(r2) = r2 {
+                    ui.small(format!("R² = {r2:.6}"));
+                }
+            }
         }
         column_names
     }
@@ -3453,6 +3528,8 @@ mod tests {
                 parent_dataset_id: Some("source-id".to_owned()),
                 source_x_column: "Theta".to_owned(),
                 source_y_column: "2-X".to_owned(),
+                equation: Some("y = x + 1".to_owned()),
+                display_equation: Some("y = x + 1".to_owned()),
             }),
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
@@ -3498,6 +3575,8 @@ mod tests {
         let refitted_import = FitOverlay {
             points: vec![[0.0, 1.0]],
             r2: 0.99,
+            equation: "y = x + 1".to_owned(),
+            display_equation: "y = x + 1".to_owned(),
             name: "refitted import".to_owned(),
             target: FitTarget {
                 dataset_index: Some(1),
@@ -3532,12 +3611,16 @@ mod tests {
             FitOverlay {
                 points: vec![[0.0, 1.0]],
                 r2: 0.5,
+                equation: "y = x".to_owned(),
+                display_equation: "y = x".to_owned(),
                 name: "old".to_owned(),
                 target: target.clone(),
             },
             FitOverlay {
                 points: vec![[0.0, 2.0]],
                 r2: 0.9,
+                equation: "y = 2 × x".to_owned(),
+                display_equation: "y = 2 × x".to_owned(),
                 name: "other".to_owned(),
                 target: other_target,
             },
@@ -3547,6 +3630,8 @@ mod tests {
             FitOverlay {
                 points: vec![[0.0, 3.0]],
                 r2: 0.99,
+                equation: "y = 3 × x".to_owned(),
+                display_equation: "y = 3 × x".to_owned(),
                 name: "new".to_owned(),
                 target,
             }
@@ -3574,6 +3659,8 @@ mod tests {
         let fit = FitOverlay {
             points: vec![[0.0, 1.0]],
             r2: 1.0,
+            equation: "y = x + 1".to_owned(),
+            display_equation: "y = x + 1".to_owned(),
             name: "fit".to_owned(),
             target: FitTarget {
                 dataset_index: Some(0),
@@ -3601,6 +3688,8 @@ mod tests {
         let make_overlay = |dataset_index: usize, source_id: &str, r2: f64| FitOverlay {
             points: vec![[0.0, r2]],
             r2,
+            equation: format!("y = {r2} × x"),
+            display_equation: format!("y = {r2} × x"),
             name: format!("fit-{source_id}"),
             target: FitTarget {
                 dataset_index: Some(dataset_index),

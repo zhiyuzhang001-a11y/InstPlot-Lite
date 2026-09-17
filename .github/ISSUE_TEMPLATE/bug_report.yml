@@ -24,7 +24,7 @@ body:
     id: package
     attributes:
       label: 下载的安装包文件名
-      placeholder: 例如 InstPlot-Lite-0.3.1-windows-x64-setup.exe
+      placeholder: 例如 InstPlot-Lite-0.3.2-windows-x64-setup.exe
     validations:
       required: true
   - type: textarea

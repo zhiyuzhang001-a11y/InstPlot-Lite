@@ -42,6 +42,8 @@ pub struct ExportSummary {
 #[derive(Clone, Copy)]
 pub struct FitCurveExport<'a> {
     pub name: &'a str,
+    pub equation: &'a str,
+    pub display_equation: &'a str,
     pub points: &'a [[f64; 2]],
     pub r_squared: f64,
     pub parent_dataset_id: Option<&'a str>,
@@ -318,6 +320,18 @@ fn save_workbook_refs_with_columns(
                 )
                 .map_err(|error| error.to_string())?;
             header_row += 3;
+            if let Some(equation) = &link.equation {
+                worksheet
+                    .write_string(header_row, 0, format!("# Equation: {equation}"))
+                    .map_err(|error| error.to_string())?;
+                header_row += 1;
+            }
+            if let Some(equation) = &link.display_equation {
+                worksheet
+                    .write_string(header_row, 0, format!("# Display-Equation: {equation}"))
+                    .map_err(|error| error.to_string())?;
+                header_row += 1;
+            }
         }
         for (output_index, source_index) in columns.iter().copied().enumerate() {
             let column = &dataset.columns[source_index];
@@ -374,13 +388,23 @@ fn save_workbook_refs_with_columns(
         worksheet
             .write_string(3, 0, format!("# Source-Y: {}", fit.source_y_column))
             .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(4, 0, format!("# Equation: {}", fit.equation))
+            .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(
+                5,
+                0,
+                format!("# Display-Equation: {}", fit.display_equation),
+            )
+            .map_err(|error| error.to_string())?;
         for (column, header) in ["X", "拟合 Y", "R²"].into_iter().enumerate() {
             worksheet
-                .write_string(4, column as u16, header)
+                .write_string(6, column as u16, header)
                 .map_err(|error| error.to_string())?;
         }
         for (row, [x, y]) in fit.points.iter().enumerate() {
-            let row = u32::try_from(row + 5).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
+            let row = u32::try_from(row + 7).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
             worksheet
                 .write_number(row, 0, *x)
                 .map_err(|error| error.to_string())?;
@@ -485,6 +509,16 @@ fn write_source_section(
                 .as_bytes(),
             )
             .map_err(|error| error.to_string())?;
+        if let Some(equation) = &link.equation {
+            output
+                .write_all(format!("# Equation: {}\n", metadata_text(equation)).as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(equation) = &link.display_equation {
+            output
+                .write_all(format!("# Display-Equation: {}\n", metadata_text(equation)).as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
     }
     output.write_all(b"\n").map_err(|error| error.to_string())?;
     write_retained_rows_selected(output, dataset, columns, delimiter)?;
@@ -510,10 +544,12 @@ fn write_fit_section(
     output
         .write_all(
             format!(
-                "# Type: fit\n# Parent-ID: {}\n# Source-X: {}\n# Source-Y: {}\n\n",
+                "# Type: fit\n# Parent-ID: {}\n# Source-X: {}\n# Source-Y: {}\n# Equation: {}\n# Display-Equation: {}\n\n",
                 fit.parent_dataset_id.unwrap_or("*"),
                 metadata_text(fit.source_x_column),
                 metadata_text(fit.source_y_column),
+                metadata_text(fit.equation),
+                metadata_text(fit.display_equation),
             )
             .as_bytes(),
         )
@@ -819,6 +855,8 @@ mod tests {
             &[0, 1],
             &[FitCurveExport {
                 name: "sample · 拟合 1",
+                equation: "y = 12345678.912345 × x + 0.123456789",
+                display_equation: "y = 1.23e7 × x + 0.12",
                 points: &points,
                 r_squared: 0.98,
                 parent_dataset_id: Some("test-sample.csv"),
@@ -840,6 +878,14 @@ mod tests {
         assert_eq!(link.parent_dataset_id.as_deref(), Some("test-sample.csv"));
         assert_eq!(link.source_x_column, "磁场,Oe");
         assert_eq!(link.source_y_column, "信号");
+        assert_eq!(
+            link.equation.as_deref(),
+            Some("y = 12345678.912345 × x + 0.123456789")
+        );
+        assert_eq!(
+            link.display_equation.as_deref(),
+            Some("y = 1.23e7 × x + 0.12")
+        );
         assert_eq!(imported[0].columns[0].values, [1.0, 3.0]);
         assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         std::fs::remove_dir_all(directory).unwrap();
@@ -857,6 +903,8 @@ mod tests {
                 &[0, 1],
                 &[FitCurveExport {
                     name: "sample fitted",
+                    equation: "y = 2 × x + 1",
+                    display_equation: "y = 2 × x + 1",
                     points: &points,
                     r_squared: 0.98,
                     parent_dataset_id: Some("test-sample.csv"),
@@ -885,6 +933,8 @@ mod tests {
             parent_dataset_id: Some(source.plot_id.clone()),
             source_x_column: "磁场,Oe".to_owned(),
             source_y_column: "信号".to_owned(),
+            equation: Some("y = 2 × x + 1".to_owned()),
+            display_equation: Some("y = 2 × x + 1".to_owned()),
         });
         fit.columns[0].name = "X".to_owned();
         fit.columns[1].name = "拟合 Y".to_owned();
@@ -911,6 +961,8 @@ mod tests {
         );
         assert_eq!(link.source_x_column, "磁场,Oe");
         assert_eq!(link.source_y_column, "信号");
+        assert_eq!(link.equation.as_deref(), Some("y = 2 × x + 1"));
+        assert_eq!(link.display_equation.as_deref(), Some("y = 2 × x + 1"));
 
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -927,6 +979,8 @@ mod tests {
                 &[0],
                 &[FitCurveExport {
                     name: "sample fitted",
+                    equation: "y = 2 × x + 1",
+                    display_equation: "y = 2 × x + 1",
                     points: &points,
                     r_squared: 0.98,
                     parent_dataset_id: Some("test-sample.csv"),
@@ -957,6 +1011,8 @@ mod tests {
             &[0, 2],
             &[FitCurveExport {
                 name: "sample fitted",
+                equation: "y = 12345678.912345 × x + 0.123456789",
+                display_equation: "y = 1.23e7 × x + 0.12",
                 points: &points,
                 r_squared: 0.98,
                 parent_dataset_id: Some("test-sample.csv"),
@@ -1000,6 +1056,8 @@ mod tests {
                 format,
                 &[FitCurveExport {
                     name: "final fit",
+                    equation: "y = 2 × x + 1",
+                    display_equation: "y = 2 × x + 1",
                     points: &points,
                     r_squared: 0.98,
                     parent_dataset_id: Some("test-first.csv"),
@@ -1066,6 +1124,8 @@ mod tests {
             &[dataset("sample.csv")],
             &[FitCurveExport {
                 name: "sample fitted",
+                equation: "y = 12345678.912345 × x + 0.123456789",
+                display_equation: "y = 1.23e7 × x + 0.12",
                 points: &points,
                 r_squared: 0.98,
                 parent_dataset_id: Some("test-sample.csv"),
@@ -1084,6 +1144,14 @@ mod tests {
         assert_eq!(link.parent_dataset_id.as_deref(), Some("test-sample.csv"));
         assert_eq!(link.source_x_column, "磁场,Oe");
         assert_eq!(link.source_y_column, "信号");
+        assert_eq!(
+            link.equation.as_deref(),
+            Some("y = 12345678.912345 × x + 0.123456789")
+        );
+        assert_eq!(
+            link.display_equation.as_deref(),
+            Some("y = 1.23e7 × x + 0.12")
+        );
         assert!(imported[0].display_name().contains("sample"));
         assert!(imported[1].display_name().contains("sample fitted"));
         assert_eq!(imported[1].columns[0].values, [0.0, 1.0]);

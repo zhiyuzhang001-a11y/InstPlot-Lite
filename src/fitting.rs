@@ -29,6 +29,7 @@ pub enum FormulaAxis {
 #[derive(Clone, Debug)]
 pub struct FitResult {
     pub equation: String,
+    pub display_equation: String,
     pub r2: f64,
     pub points: Vec<[f64; 2]>,
     #[cfg(test)]
@@ -61,123 +62,157 @@ impl std::error::Error for FitError {}
 #[allow(clippy::type_complexity)]
 pub fn fit_values(x: &[f64], y: &[f64], method: &FitMethod) -> Result<FitResult, FitError> {
     validate_values(x, y)?;
-    let (parameters, equation, evaluator): (Vec<f64>, String, Box<dyn Fn(f64, &[f64]) -> f64>) =
-        match method {
-            FitMethod::Polynomial { degree } => {
-                if !(1..=10).contains(degree) {
-                    return Err(FitError::new("invalid_degree", "多项式阶数必须为 1 到 10"));
-                }
-                if x.len() <= *degree {
-                    return Err(FitError::new(
-                        "insufficient_points",
-                        "数据点数量必须大于多项式阶数",
-                    ));
-                }
-                let solution = polynomial_fit(x, y, *degree)?;
-                let equation = polynomial_equation(&solution.original_coefficients);
-                let normalized_coefficients = solution.normalized_coefficients;
-                let center = solution.center;
-                let scale = solution.scale;
-                (
-                    solution.original_coefficients,
-                    equation,
-                    Box::new(move |value, _parameters| {
-                        let normalized = (value - center) / scale;
-                        normalized_coefficients
-                            .iter()
-                            .fold(0.0, |result, coefficient| result * normalized + coefficient)
-                    }),
-                )
+    let (parameters, equation, display_equation, evaluator): (
+        Vec<f64>,
+        String,
+        String,
+        Box<dyn Fn(f64, &[f64]) -> f64>,
+    ) = match method {
+        FitMethod::Polynomial { degree } => {
+            if !(1..=10).contains(degree) {
+                return Err(FitError::new("invalid_degree", "多项式阶数必须为 1 到 10"));
             }
-            FitMethod::Exponential => {
-                let initial = exponential_initial(x, y);
-                let evaluator =
-                    |value: f64, parameters: &[f64]| parameters[0] * (parameters[1] * value).exp();
-                let parameters = nonlinear_fit(x, y, initial, &evaluator)?;
-                let equation = format!(
-                    "y = {} × exp({} × x)",
-                    format_number(parameters[0]),
-                    format_number(parameters[1])
-                );
-                (parameters, equation, Box::new(evaluator))
+            if x.len() <= *degree {
+                return Err(FitError::new(
+                    "insufficient_points",
+                    "数据点数量必须大于多项式阶数",
+                ));
             }
-            FitMethod::Logarithmic => {
-                if x.iter().any(|value| *value <= 0.0) {
-                    return Err(FitError::new("invalid_domain", "对数拟合要求所有 X 大于 0"));
-                }
-                let transformed: Vec<f64> = x.iter().map(|value| value.ln()).collect();
-                let coefficients = linear_fit(&transformed, y)?;
-                let parameters = vec![coefficients[0], coefficients[1]];
-                let equation = format!(
-                    "y = {} × ln(x) + {}",
-                    format_number(parameters[0]),
-                    format_number(parameters[1])
-                );
-                (
-                    parameters,
-                    equation,
-                    Box::new(|value, parameters| parameters[0] * value.ln() + parameters[1]),
-                )
+            let solution = polynomial_fit(x, y, *degree)?;
+            let equation = polynomial_equation(&solution.original_coefficients);
+            let display_equation = polynomial_display_equation(&solution.original_coefficients);
+            let normalized_coefficients = solution.normalized_coefficients;
+            let center = solution.center;
+            let scale = solution.scale;
+            (
+                solution.original_coefficients,
+                equation,
+                display_equation,
+                Box::new(move |value, _parameters| {
+                    let normalized = (value - center) / scale;
+                    normalized_coefficients
+                        .iter()
+                        .fold(0.0, |result, coefficient| result * normalized + coefficient)
+                }),
+            )
+        }
+        FitMethod::Exponential => {
+            let initial = exponential_initial(x, y);
+            let evaluator =
+                |value: f64, parameters: &[f64]| parameters[0] * (parameters[1] * value).exp();
+            let parameters = nonlinear_fit(x, y, initial, &evaluator)?;
+            let equation = format!(
+                "y = {} × exp({} × x)",
+                format_number(parameters[0]),
+                format_number(parameters[1])
+            );
+            let display_equation = format!(
+                "y = {} × exp({} × x)",
+                format_display_number(parameters[0]),
+                format_display_number(parameters[1])
+            );
+            (parameters, equation, display_equation, Box::new(evaluator))
+        }
+        FitMethod::Logarithmic => {
+            if x.iter().any(|value| *value <= 0.0) {
+                return Err(FitError::new("invalid_domain", "对数拟合要求所有 X 大于 0"));
             }
-            FitMethod::Power => {
-                if x.iter().any(|value| *value <= 0.0) || y.iter().any(|value| *value <= 0.0) {
-                    return Err(FitError::new(
-                        "invalid_domain",
-                        "幂函数拟合要求所有 X、Y 大于 0",
-                    ));
-                }
-                let log_x: Vec<f64> = x.iter().map(|value| value.ln()).collect();
-                let log_y: Vec<f64> = y.iter().map(|value| value.ln()).collect();
-                let seed = linear_fit(&log_x, &log_y)?;
-                let initial = vec![seed[1].exp(), seed[0]];
-                let evaluator =
-                    |value: f64, parameters: &[f64]| parameters[0] * value.powf(parameters[1]);
-                let parameters = nonlinear_fit(x, y, initial, &evaluator)?;
-                let equation = format!(
-                    "y = {} × x^{}",
-                    format_number(parameters[0]),
-                    format_number(parameters[1])
-                );
-                (parameters, equation, Box::new(evaluator))
+            let transformed: Vec<f64> = x.iter().map(|value| value.ln()).collect();
+            let coefficients = linear_fit(&transformed, y)?;
+            let parameters = vec![coefficients[0], coefficients[1]];
+            let equation = format!(
+                "y = {} × ln(x){}",
+                format_number(parameters[0]),
+                format_signed_addend(parameters[1], format_number)
+            );
+            let display_equation = format!(
+                "y = {} × ln(x){}",
+                format_display_number(parameters[0]),
+                format_signed_addend(parameters[1], format_display_number)
+            );
+            (
+                parameters,
+                equation,
+                display_equation,
+                Box::new(|value, parameters| parameters[0] * value.ln() + parameters[1]),
+            )
+        }
+        FitMethod::Power => {
+            if x.iter().any(|value| *value <= 0.0) || y.iter().any(|value| *value <= 0.0) {
+                return Err(FitError::new(
+                    "invalid_domain",
+                    "幂函数拟合要求所有 X、Y 大于 0",
+                ));
             }
-            FitMethod::Custom {
-                expression,
-                initial_parameters,
-            } => {
-                if initial_parameters.is_empty() || initial_parameters.len() > PARAMETER_NAMES.len()
-                {
-                    return Err(FitError::new(
-                        "invalid_parameters",
-                        "自定义拟合需要 1 到 8 个初始参数",
-                    ));
-                }
-                if initial_parameters.iter().any(|value| !value.is_finite()) {
-                    return Err(FitError::new(
-                        "invalid_parameters",
-                        "初始参数必须是有限数值",
-                    ));
-                }
-                let normalized = normalize_expression(expression);
-                if normalized.is_empty() {
-                    return Err(FitError::new("invalid_expression", "自定义表达式不能为空"));
-                }
-                let parsed = CustomExpression::parse(&normalized, initial_parameters.len())?;
-                let evaluator = move |value: f64, parameters: &[f64]| {
-                    parsed.evaluate(value, parameters).unwrap_or(f64::NAN)
-                };
-                let parameters = nonlinear_fit(x, y, initial_parameters.clone(), &evaluator)?;
-                let parameter_text = parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        format!("{}={}", PARAMETER_NAMES[index], format_number(*value))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let equation = format!("y = {normalized}  ({parameter_text})");
-                (parameters, equation, Box::new(evaluator))
+            let log_x: Vec<f64> = x.iter().map(|value| value.ln()).collect();
+            let log_y: Vec<f64> = y.iter().map(|value| value.ln()).collect();
+            let seed = linear_fit(&log_x, &log_y)?;
+            let initial = vec![seed[1].exp(), seed[0]];
+            let evaluator =
+                |value: f64, parameters: &[f64]| parameters[0] * value.powf(parameters[1]);
+            let parameters = nonlinear_fit(x, y, initial, &evaluator)?;
+            let equation = format!(
+                "y = {} × x^{}",
+                format_number(parameters[0]),
+                format_number(parameters[1])
+            );
+            let display_equation = format!(
+                "y = {} × x^{}",
+                format_display_number(parameters[0]),
+                format_display_number(parameters[1])
+            );
+            (parameters, equation, display_equation, Box::new(evaluator))
+        }
+        FitMethod::Custom {
+            expression,
+            initial_parameters,
+        } => {
+            if initial_parameters.is_empty() || initial_parameters.len() > PARAMETER_NAMES.len() {
+                return Err(FitError::new(
+                    "invalid_parameters",
+                    "自定义拟合需要 1 到 8 个初始参数",
+                ));
             }
-        };
+            if initial_parameters.iter().any(|value| !value.is_finite()) {
+                return Err(FitError::new(
+                    "invalid_parameters",
+                    "初始参数必须是有限数值",
+                ));
+            }
+            let normalized = normalize_expression(expression);
+            if normalized.is_empty() {
+                return Err(FitError::new("invalid_expression", "自定义表达式不能为空"));
+            }
+            let parsed = CustomExpression::parse(&normalized, initial_parameters.len())?;
+            let evaluator = move |value: f64, parameters: &[f64]| {
+                parsed.evaluate(value, parameters).unwrap_or(f64::NAN)
+            };
+            let parameters = nonlinear_fit(x, y, initial_parameters.clone(), &evaluator)?;
+            let parameter_text = parameters
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    format!("{}={}", PARAMETER_NAMES[index], format_number(*value))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let equation = format!("y = {normalized}  ({parameter_text})");
+            let display_parameter_text = parameters
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    format!(
+                        "{}={}",
+                        PARAMETER_NAMES[index],
+                        format_display_number(*value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let display_equation = format!("y = {normalized}  ({display_parameter_text})");
+            (parameters, equation, display_equation, Box::new(evaluator))
+        }
+    };
 
     let predicted = evaluate_all(x, &parameters, evaluator.as_ref())?;
     let mean = y.iter().sum::<f64>() / y.len() as f64;
@@ -210,6 +245,7 @@ pub fn fit_values(x: &[f64], y: &[f64], method: &FitMethod) -> Result<FitResult,
     }
     Ok(FitResult {
         equation,
+        display_equation,
         r2,
         points,
         #[cfg(test)]
@@ -904,6 +940,14 @@ fn expression_syntax_hint(source: &str) -> Option<String> {
 }
 
 fn polynomial_equation(coefficients: &[f64]) -> String {
+    polynomial_equation_with(coefficients, format_number)
+}
+
+fn polynomial_display_equation(coefficients: &[f64]) -> String {
+    polynomial_equation_with(coefficients, format_display_number)
+}
+
+fn polynomial_equation_with(coefficients: &[f64], formatter: fn(f64) -> String) -> String {
     let degree = coefficients.len() - 1;
     let terms = coefficients
         .iter()
@@ -912,9 +956,9 @@ fn polynomial_equation(coefficients: &[f64]) -> String {
         .map(|(index, coefficient)| {
             let power = degree - index;
             match power {
-                0 => format_number(*coefficient),
-                1 => format!("{}×x", format_number(*coefficient)),
-                _ => format!("{}×x^{power}", format_number(*coefficient)),
+                0 => formatter(*coefficient),
+                1 => format!("{}×x", formatter(*coefficient)),
+                _ => format!("{}×x^{power}", formatter(*coefficient)),
             }
         })
         .collect::<Vec<_>>();
@@ -926,13 +970,39 @@ fn polynomial_equation(coefficients: &[f64]) -> String {
     format!("y = {body}")
 }
 
+fn format_signed_addend(value: f64, formatter: fn(f64) -> String) -> String {
+    if value.is_sign_negative() {
+        format!(" - {}", formatter(value.abs()))
+    } else {
+        format!(" + {}", formatter(value))
+    }
+}
+
+fn format_display_number(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    if value.abs() >= 10_000.0 || value.abs() < 0.01 {
+        return format!("{value:.2e}")
+            .replace("e+", "e")
+            .replace("e0", "e")
+            .replace("e-0", "e-");
+    }
+    format!("{value:.2}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
 fn format_number(value: f64) -> String {
     if value == 0.0 {
         "0".to_owned()
-    } else if value.abs() >= 10_000.0 || value.abs() < 0.001 {
-        format!("{value:.4e}")
+    } else if value.abs() >= 1_000_000_000.0 || value.abs() < 0.000_001 {
+        format!("{value:.8e}")
     } else {
-        format!("{value:.4}")
+        let exponent = value.abs().log10().floor() as i32;
+        let decimal_places = (8 - exponent).clamp(0, 12) as usize;
+        format!("{value:.decimal_places$}")
             .trim_end_matches('0')
             .trim_end_matches('.')
             .to_owned()
@@ -946,8 +1016,17 @@ fn numeric_failure() -> FitError {
 #[cfg(test)]
 mod tests {
     use super::{
-        FitMethod, FormulaAxis, evaluate_constant_expression, fit_values, formula_output_axis,
+        FitMethod, FormulaAxis, evaluate_constant_expression, fit_values, format_display_number,
+        formula_output_axis,
     };
+
+    #[test]
+    fn main_interface_coefficients_are_compact_without_losing_significance_in_exports() {
+        assert_eq!(format_display_number(12.3456), "12.35");
+        assert_eq!(format_display_number(12.0), "12");
+        assert_eq!(format_display_number(12_345_678.9), "1.23e7");
+        assert_eq!(format_display_number(0.000_012_345), "1.23e-5");
+    }
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -1025,6 +1104,8 @@ mod tests {
         let result = fit_values(&x, &logarithmic, &FitMethod::Logarithmic).unwrap();
         assert_close(result.parameters[0], 3.0, 1e-10);
         assert_close(result.parameters[1], -2.0, 1e-10);
+        assert_eq!(result.display_equation, "y = 3 × ln(x) - 2");
+        assert!(!result.equation.contains("+ -"));
 
         let power: Vec<f64> = x.iter().map(|value| 1.7 * value.powf(2.2)).collect();
         let result = fit_values(&x, &power, &FitMethod::Power).unwrap();
