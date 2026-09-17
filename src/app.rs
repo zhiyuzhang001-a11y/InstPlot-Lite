@@ -440,6 +440,8 @@ impl InstPlotLiteApp {
             .collapsible(false)
             .resizable(true)
             .default_width(430.0)
+            .default_height(560.0)
+            .min_height(360.0)
             .show(context, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -451,6 +453,7 @@ impl InstPlotLiteApp {
                                 return;
                             };
                             ui.label("选择要导出的数据集或曲线。");
+                            ui.small("实时拟合结果会随其关联数据集一起导出。");
                             ui.horizontal_wrapped(|ui| {
                                 if ui.button("当前").clicked() {
                                     settings.datasets.fill(false);
@@ -477,8 +480,11 @@ impl InstPlotLiteApp {
                                             } else {
                                                 ""
                                             };
-                                            ui.checkbox(selected, format!("{marker}{name}"))
-                                                .on_hover_text(name);
+                                            ui.checkbox(
+                                                selected,
+                                                format!("{marker}{}", compact_label(name, 52)),
+                                            )
+                                            .on_hover_text(name);
                                         }
                                     }
                                 });
@@ -1852,12 +1858,17 @@ impl InstPlotLiteApp {
                 .selected_text(
                     dataset_names
                         .get(app.active_dataset)
-                        .map(|name| format!("当前：{name}"))
+                        .map(|name| format!("当前：{}", compact_label(name, 28)))
                         .unwrap_or_else(|| "未选择".to_owned()),
                 )
                 .show_ui(ui, |ui| {
                     for (index, name) in dataset_names.iter().enumerate() {
-                        ui.selectable_value(&mut app.active_dataset, index, name);
+                        ui.selectable_value(
+                            &mut app.active_dataset,
+                            index,
+                            compact_label(name, 52),
+                        )
+                        .on_hover_text(name);
                     }
                 })
                 .response;
@@ -2376,11 +2387,26 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
 }
 
 fn legend_series_name(name: &str, is_active: bool) -> String {
+    let name = compact_label(name, 56);
     if is_active {
         format!("▶ {name}")
     } else {
-        name.to_owned()
+        name
     }
+}
+
+fn compact_label(value: &str, maximum_chars: usize) -> String {
+    let characters = value.chars().collect::<Vec<_>>();
+    if characters.len() <= maximum_chars || maximum_chars < 5 {
+        return value.to_owned();
+    }
+    let suffix_count = maximum_chars / 3;
+    let prefix_count = maximum_chars - suffix_count - 1;
+    let prefix = characters[..prefix_count].iter().collect::<String>();
+    let suffix = characters[characters.len() - suffix_count..]
+        .iter()
+        .collect::<String>();
+    format!("{prefix}…{suffix}")
 }
 
 fn preferred_import_columns(
@@ -2689,8 +2715,8 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        FitOverlay, FitTarget, configure_interface_style, demo_curve, legend_series_name,
-        preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
+        FitOverlay, FitTarget, compact_label, configure_interface_style, demo_curve,
+        legend_series_name, preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
     };
     use eframe::egui;
 
@@ -2748,6 +2774,15 @@ mod tests {
     fn active_curve_is_explicitly_marked_in_the_legend() {
         assert_eq!(legend_series_name("sample.csv", true), "▶ sample.csv");
         assert_eq!(legend_series_name("other.csv", false), "other.csv");
+    }
+
+    #[test]
+    fn long_dataset_labels_keep_their_start_and_distinguishing_suffix() {
+        assert_eq!(
+            compact_label("abcdefghijklmnopqrstuvwxyz", 10),
+            "abcdef…xyz"
+        );
+        assert_eq!(compact_label("short", 10), "short");
     }
 
     #[test]
