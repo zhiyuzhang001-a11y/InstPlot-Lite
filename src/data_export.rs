@@ -57,7 +57,7 @@ pub fn save_retained_rows_selected_with_fits(
     fits: &[FitCurveExport<'_>],
 ) -> Result<usize, String> {
     validate_column_selection(dataset, columns)?;
-    validate_fit_compatible_selection(columns, fits)?;
+    validate_fit_compatible_selection(dataset, columns, fits)?;
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -88,7 +88,7 @@ pub fn save_workbook_selected_with_fits(
     fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
     validate_column_selection(dataset, columns)?;
-    validate_fit_compatible_selection(columns, fits)?;
+    validate_fit_compatible_selection(dataset, columns, fits)?;
     save_workbook_with_columns(path, std::slice::from_ref(dataset), Some(columns), fits)
 }
 
@@ -102,9 +102,20 @@ pub fn save_all_text(
     save_all_text_with_fits(directory, datasets, format, &fits)
 }
 
+#[cfg(test)]
 pub fn save_all_text_with_fits(
     directory: &Path,
     datasets: &[DataSet],
+    format: TextExportFormat,
+    fits_by_dataset: &[Vec<FitCurveExport<'_>>],
+) -> Result<ExportSummary, String> {
+    let dataset_refs = datasets.iter().collect::<Vec<_>>();
+    save_texts_separate_with_fits(directory, &dataset_refs, format, fits_by_dataset)
+}
+
+pub fn save_texts_separate_with_fits(
+    directory: &Path,
+    datasets: &[&DataSet],
     format: TextExportFormat,
     fits_by_dataset: &[Vec<FitCurveExport<'_>>],
 ) -> Result<ExportSummary, String> {
@@ -135,9 +146,20 @@ pub fn save_all_text_with_fits(
     })
 }
 
+#[cfg(test)]
 pub fn save_all_text_combined(
     path: &Path,
     datasets: &[DataSet],
+    format: TextExportFormat,
+    fits: &[FitCurveExport<'_>],
+) -> Result<ExportSummary, String> {
+    let dataset_refs = datasets.iter().collect::<Vec<_>>();
+    save_text_combined(path, &dataset_refs, format, fits)
+}
+
+pub fn save_text_combined(
+    path: &Path,
+    datasets: &[&DataSet],
     format: TextExportFormat,
     fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
@@ -184,17 +206,37 @@ pub fn save_workbook(path: &Path, datasets: &[DataSet]) -> Result<ExportSummary,
     save_workbook_with_columns(path, datasets, None, &[])
 }
 
+#[cfg(test)]
 pub fn save_workbook_with_fits(
     path: &Path,
     datasets: &[DataSet],
     fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
-    save_workbook_with_columns(path, datasets, None, fits)
+    let dataset_refs = datasets.iter().collect::<Vec<_>>();
+    save_workbook_refs_with_columns(path, &dataset_refs, None, fits)
 }
 
 fn save_workbook_with_columns(
     path: &Path,
     datasets: &[DataSet],
+    selected_columns: Option<&[usize]>,
+    fits: &[FitCurveExport<'_>],
+) -> Result<ExportSummary, String> {
+    let dataset_refs = datasets.iter().collect::<Vec<_>>();
+    save_workbook_refs_with_columns(path, &dataset_refs, selected_columns, fits)
+}
+
+pub fn save_workbook_refs_with_fits(
+    path: &Path,
+    datasets: &[&DataSet],
+    fits: &[FitCurveExport<'_>],
+) -> Result<ExportSummary, String> {
+    save_workbook_refs_with_columns(path, datasets, None, fits)
+}
+
+fn save_workbook_refs_with_columns(
+    path: &Path,
+    datasets: &[&DataSet],
     selected_columns: Option<&[usize]>,
     fits: &[FitCurveExport<'_>],
 ) -> Result<ExportSummary, String> {
@@ -294,6 +336,32 @@ fn save_workbook_with_columns(
     })
 }
 
+pub fn save_workbooks_separate_with_fits(
+    directory: &Path,
+    datasets: &[&DataSet],
+    fits_by_dataset: &[Vec<FitCurveExport<'_>>],
+) -> Result<ExportSummary, String> {
+    if datasets.is_empty() {
+        return Err("没有可导出的数据集".to_owned());
+    }
+    if fits_by_dataset.len() != datasets.len() {
+        return Err("拟合结果与数据集数量不匹配".to_owned());
+    }
+    let mut reserved_names = HashSet::new();
+    let mut row_count = 0_usize;
+    for (dataset, fits) in datasets.iter().zip(fits_by_dataset) {
+        let base = format!("{}-cleaned", dataset_export_base(dataset));
+        let path = unique_text_path(directory, &base, "xlsx", &mut reserved_names);
+        let summary = save_workbook_refs_with_columns(&path, &[*dataset], None, fits)
+            .map_err(|error| format!("{}：{error}", path.display()))?;
+        row_count += summary.row_count;
+    }
+    Ok(ExportSummary {
+        dataset_count: datasets.len(),
+        row_count,
+    })
+}
+
 #[cfg(test)]
 fn encode_retained_rows(dataset: &DataSet, delimiter: u8) -> Result<Vec<u8>, String> {
     let columns: Vec<usize> = (0..dataset.columns.len()).collect();
@@ -310,7 +378,7 @@ fn write_text_export(
     if fits.is_empty() && dataset.kind == DataSetKind::Source {
         return write_retained_rows_selected(output, dataset, columns, delimiter);
     }
-    validate_fit_compatible_selection(columns, fits)?;
+    validate_fit_compatible_selection(dataset, columns, fits)?;
     write_source_section(output, dataset, columns, delimiter)?;
     for fit in fits {
         output.write_all(b"\n").map_err(|error| error.to_string())?;
@@ -451,10 +519,11 @@ fn validate_column_selection(dataset: &DataSet, columns: &[usize]) -> Result<(),
 }
 
 fn validate_fit_compatible_selection(
+    dataset: &DataSet,
     columns: &[usize],
     fits: &[FitCurveExport<'_>],
 ) -> Result<(), String> {
-    if !fits.is_empty() && columns.len() < 2 {
+    if (dataset.kind == DataSetKind::Fit || !fits.is_empty()) && columns.len() < 2 {
         return Err("包含拟合结果时，请至少选择两列原始数据，以便文件能够重新导入".to_owned());
     }
     Ok(())
@@ -567,7 +636,8 @@ mod tests {
     use super::{
         FitCurveExport, TextExportFormat, encode_retained_rows, encode_retained_rows_selected,
         save_all_text, save_all_text_combined, save_retained_rows_selected_with_fits,
-        save_workbook, save_workbook_with_fits,
+        save_text_combined, save_workbook, save_workbook_with_fits,
+        save_workbooks_separate_with_fits,
     };
     use crate::data::{DataSet, DataSetKind, NumericColumn, read_data_file};
     use std::path::PathBuf;
@@ -700,6 +770,19 @@ mod tests {
     }
 
     #[test]
+    fn imported_fit_dataset_rejects_single_column_export_without_live_fit() {
+        let directory = temporary_directory("single-column-imported-fit");
+        let path = directory.join("single.csv");
+        let mut fit_dataset = dataset("fit.csv");
+        fit_dataset.kind = DataSetKind::Fit;
+        let error =
+            save_retained_rows_selected_with_fits(&path, &fit_dataset, &[0], &[]).unwrap_err();
+        assert!(error.contains("至少选择两列"));
+        assert!(!path.exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn combined_text_export_writes_all_sources_before_fits_and_round_trips() {
         let directory = temporary_directory("combined-all");
         let points = [[0.0, 1.0], [1.0, 3.0]];
@@ -809,6 +892,40 @@ mod tests {
         assert_eq!(imported[0].columns[0].name, "磁场,Oe");
         assert_eq!(imported[0].columns[0].values, [1.0, 3.0]);
         assert!(imported[0].display_name().contains("first"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn selected_dataset_refs_export_combined_or_as_separate_workbooks() {
+        let directory = temporary_directory("selected-refs");
+        let first = dataset("first.csv");
+        let second = dataset("second.csv");
+        let combined_path = directory.join("selected.csv");
+        save_text_combined(&combined_path, &[&second], TextExportFormat::Csv, &[]).unwrap();
+        let imported = read_data_file(&combined_path).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert!(imported[0].display_name().contains("second.csv"));
+
+        let workbooks = directory.join("workbooks");
+        std::fs::create_dir_all(&workbooks).unwrap();
+        let summary = save_workbooks_separate_with_fits(
+            &workbooks,
+            &[&first, &second],
+            &[Vec::new(), Vec::new()],
+        )
+        .unwrap();
+        assert_eq!(summary.dataset_count, 2);
+        assert_eq!(
+            std::fs::read_dir(&workbooks)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry
+                    .path()
+                    .extension()
+                    .is_some_and(|value| value == "xlsx"))
+                .count(),
+            2
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

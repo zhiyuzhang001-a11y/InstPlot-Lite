@@ -58,8 +58,68 @@ enum ProcessingResultMode {
 }
 
 struct ExportSelection {
-    extension: String,
+    format: DataExportFormat,
+    datasets: Vec<bool>,
+    layout: ExportLayout,
+    column_dataset: Option<usize>,
     columns: Vec<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportLayout {
+    Combined,
+    Separate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DataExportFormat {
+    Csv,
+    Xlsx,
+    Tsv,
+    Txt,
+    Dat,
+}
+
+impl DataExportFormat {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Xlsx => "Excel（XLSX）",
+            Self::Tsv => "TSV",
+            Self::Txt => "TXT",
+            Self::Dat => "DAT",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Xlsx => "xlsx",
+            Self::Tsv => "tsv",
+            Self::Txt => "txt",
+            Self::Dat => "dat",
+        }
+    }
+
+    fn filter_name(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV 数据",
+            Self::Xlsx => "Excel 工作簿",
+            Self::Tsv => "TSV 数据",
+            Self::Txt => "TXT 数据",
+            Self::Dat => "DAT 数据",
+        }
+    }
+
+    fn text_format(self) -> Option<data_export::TextExportFormat> {
+        match self {
+            Self::Csv => Some(data_export::TextExportFormat::Csv),
+            Self::Xlsx => None,
+            Self::Tsv => Some(data_export::TextExportFormat::Tsv),
+            Self::Txt => Some(data_export::TextExportFormat::Txt),
+            Self::Dat => Some(data_export::TextExportFormat::Dat),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,78 +370,76 @@ impl InstPlotLiteApp {
         };
     }
 
-    fn open_export_columns(&mut self, extension: &str) {
-        let Some(dataset) = self.datasets.get(self.active_dataset) else {
+    fn open_data_export(&mut self, format: DataExportFormat) {
+        if self.datasets.is_empty() {
             self.status = "请先导入数据".to_owned();
             return;
-        };
+        }
+        let mut selected = vec![false; self.datasets.len()];
+        if let Some(value) = selected.get_mut(self.active_dataset) {
+            *value = true;
+        }
+        let columns = self
+            .datasets
+            .get(self.active_dataset)
+            .map(|dataset| vec![true; dataset.columns.len()])
+            .unwrap_or_default();
         self.export_selection = Some(ExportSelection {
-            extension: extension.to_owned(),
-            columns: vec![true; dataset.columns.len()],
+            format,
+            datasets: selected,
+            layout: ExportLayout::Combined,
+            column_dataset: Some(self.active_dataset),
+            columns,
         });
     }
 
-    fn export_active_data(&mut self, extension: &str, columns: &[usize]) {
-        let Some(dataset) = self.datasets.get(self.active_dataset) else {
-            self.status = "请先导入数据".to_owned();
-            return;
-        };
-        let stem = data_export::suggested_file_stem(dataset);
-        let (filter_name, extensions): (&str, &[&str]) = match extension {
-            "xlsx" => ("Excel 工作簿", &["xlsx"]),
-            "tsv" => ("TSV 数据", &["tsv"]),
-            "txt" => ("TXT 数据", &["txt"]),
-            "dat" => ("DAT 数据", &["dat"]),
-            _ => ("CSV 数据", &["csv"]),
-        };
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(filter_name, extensions)
-            .set_file_name(format!("{stem}-cleaned.{extension}"))
-            .save_file()
-        else {
-            return;
-        };
-        let fits = self.fit_exports_for_dataset(self.active_dataset);
-        let fit_count = fits.len();
-        match data_export::save_retained_rows_selected_with_fits(&path, dataset, columns, &fits) {
-            Ok(row_count) => {
-                self.status = format!(
-                    "已导出 {row_count} 行、{} 列原始数据及 {fit_count} 个拟合数据区：{}",
-                    columns.len(),
-                    path.display()
-                )
-            }
-            Err(error) => self.status = format!("数据导出失败：{error}"),
-        }
-    }
-
     fn show_export_columns_window(&mut self, context: &egui::Context) {
-        let Some(_) = self.export_selection.as_ref() else {
+        let Some(settings) = self.export_selection.as_ref() else {
             return;
         };
-        let column_names: Vec<String> = self
+        let format_label = settings.format.label();
+        let dataset_names = self
             .datasets
-            .get(self.active_dataset)
+            .iter()
+            .map(data::DataSet::display_name)
+            .collect::<Vec<_>>();
+        let minimum_columns = (0..self.datasets.len())
+            .map(|index| {
+                let has_fit = !self.fit_exports_for_dataset(index).is_empty();
+                usize::from(has_fit || self.datasets[index].kind == data::DataSetKind::Fit) + 1
+            })
+            .collect::<Vec<_>>();
+        let selected_indices = settings
+            .datasets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, selected)| selected.then_some(index))
+            .collect::<Vec<_>>();
+        let sole_dataset = (selected_indices.len() == 1).then_some(selected_indices[0]);
+        let column_names = sole_dataset
+            .and_then(|index| self.datasets.get(index))
             .map(|dataset| {
                 dataset
                     .columns
                     .iter()
                     .map(|column| column.name.clone())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        if let Some(settings) = self.export_selection.as_mut()
+            && settings.column_dataset != sole_dataset
+        {
+            settings.column_dataset = sole_dataset;
+            settings.columns = vec![true; column_names.len()];
+        }
+
         let mut open = true;
         let mut export = false;
-        let minimum_selected = if self.fit_exports_for_dataset(self.active_dataset).is_empty() {
-            1
-        } else {
-            2
-        };
-        egui::Window::new("选择导出列")
+        egui::Window::new(format!("导出 {format_label}"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_width(360.0)
+            .default_width(430.0)
             .show(context, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -392,151 +450,269 @@ impl InstPlotLiteApp {
                             let Some(settings) = self.export_selection.as_mut() else {
                                 return;
                             };
-                            ui.label("选择当前数据集要写入文件的列。");
-                            ui.small("相关拟合曲线会自动作为独立数据区写在原始数据之后。");
-                            ui.horizontal(|ui| {
+                            ui.label("选择要导出的数据集或曲线。");
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("当前").clicked() {
+                                    settings.datasets.fill(false);
+                                    if let Some(value) =
+                                        settings.datasets.get_mut(self.active_dataset)
+                                    {
+                                        *value = true;
+                                    }
+                                }
                                 if ui.button("全选").clicked() {
-                                    settings.columns.fill(true);
+                                    settings.datasets.fill(true);
                                 }
                                 if ui.button("全不选").clicked() {
-                                    settings.columns.fill(false);
+                                    settings.datasets.fill(false);
                                 }
                             });
-                            ui.separator();
                             egui::ScrollArea::vertical()
-                                .max_height(260.0)
+                                .max_height(190.0)
                                 .show(ui, |ui| {
-                                    for (index, name) in column_names.iter().enumerate() {
-                                        if let Some(selected) = settings.columns.get_mut(index) {
-                                            ui.checkbox(selected, format!("{}：{name}", index + 1));
+                                    for (index, name) in dataset_names.iter().enumerate() {
+                                        if let Some(selected) = settings.datasets.get_mut(index) {
+                                            let marker = if index == self.active_dataset {
+                                                "▶ "
+                                            } else {
+                                                ""
+                                            };
+                                            ui.checkbox(selected, format!("{marker}{name}"))
+                                                .on_hover_text(name);
                                         }
                                     }
                                 });
-                            ui.separator();
+
                             let selected_count = settings
-                                .columns
+                                .datasets
                                 .iter()
                                 .filter(|selected| **selected)
                                 .count();
-                            ui.horizontal(|ui| {
-                                ui.label(format!("已选 {selected_count} 列"));
+                            if selected_count > 1 {
+                                ui.separator();
+                                ui.label("保存方式");
+                                ui.radio_value(
+                                    &mut settings.layout,
+                                    ExportLayout::Combined,
+                                    if settings.format == DataExportFormat::Xlsx {
+                                        "同一个工作簿（每个数据集一个工作表）"
+                                    } else {
+                                        "同一个分区文件（BEGIN/END）"
+                                    },
+                                );
+                                ui.radio_value(
+                                    &mut settings.layout,
+                                    ExportLayout::Separate,
+                                    "多个独立文件",
+                                );
+                                ui.small("多数据集导出会保留各自全部列和相关拟合结果。");
+                            }
+
+                            let sole = settings
+                                .datasets
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, selected)| selected.then_some(index))
+                                .collect::<Vec<_>>();
+                            let sole = (sole.len() == 1).then_some(sole[0]);
+                            if let Some(dataset_index) = sole {
+                                ui.separator();
+                                ui.label("选择列");
+                                ui.horizontal(|ui| {
+                                    if ui.button("全选列").clicked() {
+                                        settings.columns.fill(true);
+                                    }
+                                    if ui.button("全不选列").clicked() {
+                                        settings.columns.fill(false);
+                                    }
+                                });
+                                egui::ScrollArea::vertical()
+                                    .max_height(180.0)
+                                    .show(ui, |ui| {
+                                        for (index, name) in column_names.iter().enumerate() {
+                                            if let Some(selected) = settings.columns.get_mut(index)
+                                            {
+                                                ui.checkbox(
+                                                    selected,
+                                                    format!("{}：{name}", index + 1),
+                                                );
+                                            }
+                                        }
+                                    });
+                                let selected_columns = settings
+                                    .columns
+                                    .iter()
+                                    .filter(|selected| **selected)
+                                    .count();
+                                let minimum = minimum_columns[dataset_index];
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("已选 {selected_columns} 列"));
+                                    if ui
+                                        .add_enabled(
+                                            selected_columns >= minimum,
+                                            egui::Button::new("导出"),
+                                        )
+                                        .on_disabled_hover_text(if minimum == 2 {
+                                            "该数据包含拟合结果，至少选择两列才能重新导入"
+                                        } else {
+                                            "请至少选择一列"
+                                        })
+                                        .clicked()
+                                    {
+                                        export = true;
+                                    }
+                                });
+                            } else {
+                                ui.separator();
                                 if ui
                                     .add_enabled(
-                                        selected_count >= minimum_selected,
-                                        egui::Button::new("导出"),
+                                        selected_count > 0,
+                                        egui::Button::new(format!(
+                                            "导出已选 {selected_count} 个数据集"
+                                        )),
                                     )
-                                    .on_disabled_hover_text(if minimum_selected == 2 {
-                                        "包含拟合结果时至少选择两列，确保导出的文件能够重新导入"
-                                    } else {
-                                        "请至少选择一列"
-                                    })
+                                    .on_disabled_hover_text("请至少选择一个数据集")
                                     .clicked()
                                 {
                                     export = true;
                                 }
-                            });
+                            }
                         });
                         ui.add_space(10.0);
                     });
             });
         if export {
             let settings = self.export_selection.take().expect("export settings exist");
+            self.export_selected_data(settings);
+        } else if !open {
+            self.export_selection = None;
+        }
+    }
+
+    fn export_selected_data(&mut self, settings: ExportSelection) {
+        let indices = settings
+            .datasets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, selected)| selected.then_some(index))
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            self.status = "请至少选择一个数据集".to_owned();
+            return;
+        }
+        if indices.len() == 1 {
+            let index = indices[0];
+            let dataset = &self.datasets[index];
             let columns = settings
                 .columns
                 .iter()
                 .enumerate()
                 .filter_map(|(index, selected)| selected.then_some(index))
                 .collect::<Vec<_>>();
-            self.export_active_data(&settings.extension, &columns);
-        } else if !open {
-            self.export_selection = None;
+            let extension = settings.format.extension();
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter(settings.format.filter_name(), &[extension])
+                .set_file_name(format!(
+                    "{}-cleaned.{extension}",
+                    data_export::suggested_file_stem(dataset)
+                ))
+                .save_file()
+            else {
+                return;
+            };
+            let fits = self.fit_exports_for_dataset(index);
+            let fit_count = fits.len();
+            match data_export::save_retained_rows_selected_with_fits(
+                &path, dataset, &columns, &fits,
+            ) {
+                Ok(row_count) => {
+                    self.status = format!(
+                        "已导出 {row_count} 行、{} 列及 {fit_count} 个拟合数据区：{}",
+                        columns.len(),
+                        path.display()
+                    )
+                }
+                Err(error) => self.status = format!("数据导出失败：{error}"),
+            }
+            return;
         }
-    }
 
-    fn export_all_text_separate(&mut self, format: data_export::TextExportFormat) {
-        if self.datasets.is_empty() {
-            self.status = "请先导入数据".to_owned();
-            return;
-        }
-        let Some(directory) = rfd::FileDialog::new().pick_folder() else {
-            return;
-        };
-        let fits = (0..self.datasets.len())
-            .map(|index| self.fit_exports_for_dataset(index))
+        let datasets = indices
+            .iter()
+            .map(|index| &self.datasets[*index])
             .collect::<Vec<_>>();
-        let fit_count = fits.iter().map(Vec::len).sum::<usize>();
-        match data_export::save_all_text_with_fits(&directory, &self.datasets, format, &fits) {
-            Ok(summary) => {
-                self.status = format!(
-                    "已导出全部 {} 个数据集、共 {} 行及 {fit_count} 个拟合数据区：{}",
+        let fits_by_dataset = indices
+            .iter()
+            .map(|index| self.fit_exports_for_dataset(*index))
+            .collect::<Vec<_>>();
+        let fit_count = fits_by_dataset.iter().map(Vec::len).sum::<usize>();
+        if settings.layout == ExportLayout::Separate {
+            let Some(directory) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            let result = if let Some(format) = settings.format.text_format() {
+                data_export::save_texts_separate_with_fits(
+                    &directory,
+                    &datasets,
+                    format,
+                    &fits_by_dataset,
+                )
+            } else {
+                data_export::save_workbooks_separate_with_fits(
+                    &directory,
+                    &datasets,
+                    &fits_by_dataset,
+                )
+            };
+            self.status = match result {
+                Ok(summary) => format!(
+                    "已导出 {} 个独立文件、共 {} 行及 {fit_count} 个拟合结果：{}",
                     summary.dataset_count,
                     summary.row_count,
                     directory.display()
-                )
-            }
-            Err(error) => self.status = format!("批量数据导出失败：{error}"),
-        }
-    }
-
-    fn export_all_text_combined(&mut self, format: data_export::TextExportFormat) {
-        if self.datasets.is_empty() {
-            self.status = "请先导入数据".to_owned();
+                ),
+                Err(error) => format!("多个文件导出失败：{error}"),
+            };
             return;
         }
-        let extension = format.extension();
-        let filter_name = match format {
-            data_export::TextExportFormat::Csv => "CSV 数据",
-            data_export::TextExportFormat::Tsv => "TSV 数据",
-            data_export::TextExportFormat::Txt => "TXT 数据",
-            data_export::TextExportFormat::Dat => "DAT 数据",
-        };
+
+        let extension = settings.format.extension();
         let Some(path) = rfd::FileDialog::new()
-            .add_filter(filter_name, &[extension])
-            .set_file_name(format!("instplot-all-data.{extension}"))
+            .add_filter(settings.format.filter_name(), &[extension])
+            .set_file_name(format!("instplot-selected-data.{extension}"))
             .save_file()
         else {
             return;
         };
-        let fits = self.all_fit_exports();
-        let fit_count = fits.len();
-        match data_export::save_all_text_combined(&path, &self.datasets, format, &fits) {
-            Ok(summary) => {
-                self.status = format!(
-                    "已导出一个分区文件：{} 个数据集、{} 行及 {fit_count} 个拟合数据区：{}",
-                    summary.dataset_count,
-                    summary.row_count,
-                    path.display()
-                )
-            }
-            Err(error) => self.status = format!("合并数据导出失败：{error}"),
-        }
-    }
-
-    fn export_all_xlsx(&mut self) {
-        if self.datasets.is_empty() {
-            self.status = "请先导入数据".to_owned();
-            return;
-        }
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Excel 工作簿", &["xlsx"])
-            .set_file_name("instplot-all-data.xlsx")
-            .save_file()
-        else {
-            return;
+        let fits = self
+            .fit_overlays
+            .iter()
+            .filter(|fit| {
+                fit.target
+                    .dataset_index
+                    .is_none_or(|index| indices.contains(&index))
+            })
+            .map(|fit| data_export::FitCurveExport {
+                name: &fit.name,
+                points: &fit.points,
+                r_squared: fit.r2,
+            })
+            .collect::<Vec<_>>();
+        let result = if let Some(format) = settings.format.text_format() {
+            data_export::save_text_combined(&path, &datasets, format, &fits)
+        } else {
+            data_export::save_workbook_refs_with_fits(&path, &datasets, &fits)
         };
-        let fits = self.all_fit_exports();
-        let fit_count = fits.len();
-        match data_export::save_workbook_with_fits(&path, &self.datasets, &fits) {
-            Ok(summary) => {
-                self.status = format!(
-                    "已导出全部 {} 个数据集及 {fit_count} 个拟合工作表、共 {} 行：{}",
-                    summary.dataset_count,
-                    summary.row_count,
-                    path.display()
-                )
-            }
-            Err(error) => self.status = format!("Excel 导出失败：{error}"),
-        }
+        self.status = match result {
+            Ok(summary) => format!(
+                "已导出同一个文件：{} 个数据集、{} 行及 {} 个拟合结果：{}",
+                summary.dataset_count,
+                summary.row_count,
+                fits.len(),
+                path.display()
+            ),
+            Err(error) => format!("合并导出失败：{error}"),
+        };
     }
 
     fn fit_exports_for_dataset(
@@ -550,17 +726,6 @@ impl InstPlotLiteApp {
                     .dataset_index
                     .is_none_or(|target_index| target_index == dataset_index)
             })
-            .map(|fit| data_export::FitCurveExport {
-                name: &fit.name,
-                points: &fit.points,
-                r_squared: fit.r2,
-            })
-            .collect()
-    }
-
-    fn all_fit_exports(&self) -> Vec<data_export::FitCurveExport<'_>> {
-        self.fit_overlays
-            .iter()
             .map(|fit| data_export::FitCurveExport {
                 name: &fit.name,
                 points: &fit.points,
@@ -1635,8 +1800,8 @@ impl InstPlotLiteApp {
     }
 
     fn desired_sidebar_width(&self, ui: &egui::Ui) -> f32 {
-        const MIN_WIDTH: f32 = 185.0;
-        const MAX_WIDTH: f32 = 280.0;
+        const MIN_WIDTH: f32 = 180.0;
+        const MAX_WIDTH: f32 = 220.0;
         const COMBO_DECORATION_WIDTH: f32 = 52.0;
 
         let mut labels = Vec::with_capacity(3);
@@ -1678,7 +1843,7 @@ impl InstPlotLiteApp {
             .collect();
         let previous_dataset = self.active_dataset;
         let dataset_combo = |ui: &mut egui::Ui, app: &mut Self| {
-            egui::ComboBox::from_id_salt("active-dataset")
+            let response = egui::ComboBox::from_id_salt("active-dataset")
                 .width(if vertical {
                     (ui.available_width() - 10.0).max(100.0)
                 } else {
@@ -1694,7 +1859,11 @@ impl InstPlotLiteApp {
                     for (index, name) in dataset_names.iter().enumerate() {
                         ui.selectable_value(&mut app.active_dataset, index, name);
                     }
-                });
+                })
+                .response;
+            if let Some(name) = dataset_names.get(app.active_dataset) {
+                response.on_hover_text(name);
+            }
         };
         if vertical {
             ui.label("数据集");
@@ -1856,66 +2025,25 @@ impl eframe::App for InstPlotLiteApp {
             }
             ui.add_enabled_ui(!self.datasets.is_empty(), |ui| {
                 ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
-                    ui.label(egui::RichText::new("当前数据集").strong());
                     if ui.button("CSV").clicked() {
                         ui.close();
-                        self.open_export_columns("csv");
+                        self.open_data_export(DataExportFormat::Csv);
                     }
                     if ui.button("Excel（XLSX）").clicked() {
                         ui.close();
-                        self.open_export_columns("xlsx");
+                        self.open_data_export(DataExportFormat::Xlsx);
                     }
                     if ui.button("TSV").clicked() {
                         ui.close();
-                        self.open_export_columns("tsv");
+                        self.open_data_export(DataExportFormat::Tsv);
                     }
                     if ui.button("TXT（制表符分隔）").clicked() {
                         ui.close();
-                        self.open_export_columns("txt");
+                        self.open_data_export(DataExportFormat::Txt);
                     }
                     if ui.button("DAT（制表符分隔）").clicked() {
                         ui.close();
-                        self.open_export_columns("dat");
-                    }
-                    ui.separator();
-                    ui.label(egui::RichText::new("全部数据集").strong());
-                    if ui.button("一个 Excel 工作簿").clicked() {
-                        ui.close();
-                        self.export_all_xlsx();
-                    }
-                    if ui.button("一个 CSV 分区文件（推荐）").clicked() {
-                        ui.close();
-                        self.export_all_text_combined(data_export::TextExportFormat::Csv);
-                    }
-                    if ui.button("一个 TSV 分区文件").clicked() {
-                        ui.close();
-                        self.export_all_text_combined(data_export::TextExportFormat::Tsv);
-                    }
-                    if ui.button("一个 TXT 分区文件").clicked() {
-                        ui.close();
-                        self.export_all_text_combined(data_export::TextExportFormat::Txt);
-                    }
-                    if ui.button("一个 DAT 分区文件").clicked() {
-                        ui.close();
-                        self.export_all_text_combined(data_export::TextExportFormat::Dat);
-                    }
-                    ui.separator();
-                    ui.label(egui::RichText::new("多个独立文件").strong());
-                    if ui.button("多个 CSV 文件").clicked() {
-                        ui.close();
-                        self.export_all_text_separate(data_export::TextExportFormat::Csv);
-                    }
-                    if ui.button("多个 TSV 文件").clicked() {
-                        ui.close();
-                        self.export_all_text_separate(data_export::TextExportFormat::Tsv);
-                    }
-                    if ui.button("多个 TXT 文件").clicked() {
-                        ui.close();
-                        self.export_all_text_separate(data_export::TextExportFormat::Txt);
-                    }
-                    if ui.button("多个 DAT 文件").clicked() {
-                        ui.close();
-                        self.export_all_text_separate(data_export::TextExportFormat::Dat);
+                        self.open_data_export(DataExportFormat::Dat);
                     }
                 });
             });
