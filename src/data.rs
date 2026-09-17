@@ -214,10 +214,12 @@ fn append_bucket_extrema(output: &mut Vec<[f64; 2]>, bucket: &[(usize, [f64; 2])
     else {
         return;
     };
-    let maximum = bucket
+    let Some(maximum) = bucket
         .iter()
         .max_by(|left, right| left.1[1].total_cmp(&right.1[1]))
-        .expect("a non-empty bucket has a maximum");
+    else {
+        return;
+    };
     if minimum.0 <= maximum.0 {
         output.push(minimum.1);
         if minimum.0 != maximum.0 {
@@ -1084,6 +1086,29 @@ mod tests {
 
     fn temporary_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("instplot-lite-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn malformed_text_bytes_return_errors_instead_of_panicking() {
+        let mut state = 0x4d59_5df4_d0f3_3173_u64;
+        for length in 0..256 {
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                bytes.push((state >> 32) as u8);
+            }
+            let _ = read_data_bytes(Path::new("malformed.csv"), &bytes);
+        }
+        for bytes in [
+            &[0xff, 0xfe, 0x00][..],
+            &[0xfe, 0xff, 0x00][..],
+            b"# -----BEGIN INSTPLOT DATA-----\n1,2",
+            b"x,y\n1,2,3\n",
+        ] {
+            let _ = read_data_bytes(Path::new("malformed.csv"), bytes);
+        }
     }
 
     #[test]

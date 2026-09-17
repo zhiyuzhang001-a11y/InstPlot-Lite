@@ -498,6 +498,9 @@ impl InstPlotLiteApp {
     }
 
     fn show_export_columns_window(&mut self, context: &egui::Context) {
+        if let Some(settings) = self.export_selection.as_mut() {
+            synchronize_selection(&mut settings.datasets, self.datasets.len(), false);
+        }
         let Some(settings) = self.export_selection.as_ref() else {
             return;
         };
@@ -529,6 +532,8 @@ impl InstPlotLiteApp {
         {
             settings.column_dataset = sole_dataset;
             settings.columns = vec![true; column_names.len()];
+        } else if let Some(settings) = self.export_selection.as_mut() {
+            synchronize_selection(&mut settings.columns, column_names.len(), true);
         }
 
         let mut open = true;
@@ -642,7 +647,8 @@ impl InstPlotLiteApp {
                                     .iter()
                                     .filter(|selected| **selected)
                                     .count();
-                                let minimum = minimum_columns[dataset_index];
+                                let minimum =
+                                    minimum_columns.get(dataset_index).copied().unwrap_or(1);
                                 ui.horizontal(|ui| {
                                     ui.label(format!("已选 {selected_columns} 列"));
                                     if ui
@@ -680,8 +686,9 @@ impl InstPlotLiteApp {
                     });
             });
         if export {
-            let settings = self.export_selection.take().expect("export settings exist");
-            self.export_selected_data(settings);
+            if let Some(settings) = self.export_selection.take() {
+                self.export_selected_data(settings);
+            }
         } else if !open {
             self.export_selection = None;
         }
@@ -2599,6 +2606,10 @@ fn sole_selected_index(selected: &[bool]) -> Option<usize> {
     indices.next().is_none().then_some(first)
 }
 
+fn synchronize_selection(selected: &mut Vec<bool>, item_count: usize, new_value: bool) {
+    selected.resize(item_count, new_value);
+}
+
 fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
     let mut minimum = f64::INFINITY;
     let mut maximum = f64::NEG_INFINITY;
@@ -3081,7 +3092,7 @@ mod tests {
         AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style,
         dataset_plot_columns, demo_curve, format_axis_decimal, is_inside_range, legend_series_name,
         plot_coordinate_names, preferred_import_columns, sole_selected_index, store_fit_overlay,
-        wheel_zoom_factor,
+        synchronize_selection, wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
@@ -3112,6 +3123,19 @@ mod tests {
         assert_eq!(sole_selected_index(&[false, false]), None);
         assert_eq!(sole_selected_index(&[false, true, false]), Some(1));
         assert_eq!(sole_selected_index(&[true, true]), None);
+    }
+
+    #[test]
+    fn selection_state_tracks_items_added_or_removed_while_a_window_is_open() {
+        let mut selected = vec![true, false, true];
+        synchronize_selection(&mut selected, 1, false);
+        assert_eq!(selected, [true]);
+        synchronize_selection(&mut selected, 3, false);
+        assert_eq!(selected, [true, false, false]);
+
+        let mut columns = vec![false];
+        synchronize_selection(&mut columns, 3, true);
+        assert_eq!(columns, [false, true, true]);
     }
 
     #[test]

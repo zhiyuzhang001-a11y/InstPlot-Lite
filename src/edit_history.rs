@@ -257,7 +257,11 @@ impl EditHistory {
             .collect::<Vec<_>>();
         match commands.len() {
             0 => {}
-            1 => self.record(EditCommand::AddColumn(commands.into_iter().next().unwrap())),
+            1 => {
+                if let Some(command) = commands.into_iter().next() {
+                    self.record(EditCommand::AddColumn(command));
+                }
+            }
             _ => self.record(EditCommand::AddColumns(commands)),
         }
     }

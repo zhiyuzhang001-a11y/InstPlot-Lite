@@ -956,6 +956,22 @@ mod tests {
     }
 
     #[test]
+    fn malformed_formula_text_returns_errors_instead_of_panicking() {
+        let mut state = 0xa076_1d64_78bd_642f_u64;
+        for length in 0..64 {
+            let mut expression = String::with_capacity(length);
+            for _ in 0..length {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                expression.push(char::from(32 + (state % 95) as u8));
+            }
+            let _ = formula_output_axis(&expression);
+            let _ = evaluate_constant_expression(&expression);
+        }
+    }
+
+    #[test]
     fn fits_quadratic_and_reports_r_squared() {
         let x = [-2.0, -1.0, 0.0, 1.0, 2.0];
         let y: Vec<f64> = x
