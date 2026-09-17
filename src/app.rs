@@ -15,6 +15,92 @@ const PLOT_LEFT_GUTTER: f32 = 36.0;
 const PLOT_BOTTOM_GUTTER: f32 = 12.0;
 const PLOT_EXPORT_TOP_GUTTER: f32 = 8.0;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AxisDisplay {
+    offset: f64,
+    exponent: i32,
+}
+
+impl AxisDisplay {
+    fn from_range(range: Option<[f64; 2]>) -> Self {
+        let Some([minimum, maximum]) = range else {
+            return Self {
+                offset: 0.0,
+                exponent: 0,
+            };
+        };
+        if !minimum.is_finite() || !maximum.is_finite() {
+            return Self {
+                offset: 0.0,
+                exponent: 0,
+            };
+        }
+
+        let span = (maximum - minimum).abs();
+        let center = minimum + (maximum - minimum) * 0.5;
+        let offset = if span > 0.0 && center.abs() >= 10_000.0 && center.abs() / span >= 10_000.0 {
+            // Keep the reference coarser than the visible variation so that
+            // floating-point noise around exact powers of ten cannot make the
+            // displayed baseline jump by one tick.
+            let quantum = 10.0_f64.powf(span.log10().ceil() + 1.0);
+            if quantum.is_finite() && quantum > 0.0 {
+                (center / quantum).round() * quantum
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let magnitude = if offset == 0.0 {
+            minimum.abs().max(maximum.abs())
+        } else {
+            (minimum - offset).abs().max((maximum - offset).abs())
+        };
+        let engineering_exponent = if magnitude > 0.0 {
+            (magnitude.log10().floor() as i32).div_euclid(3) * 3
+        } else {
+            0
+        };
+        let exponent = if (offset != 0.0 && engineering_exponent != 0)
+            || magnitude >= 1_000_000.0
+            || (magnitude > 0.0 && magnitude < 0.0001)
+        {
+            engineering_exponent
+        } else {
+            0
+        };
+
+        Self { offset, exponent }
+    }
+
+    fn scale(self) -> f64 {
+        10.0_f64.powi(self.exponent)
+    }
+
+    fn format_tick(self, value: f64, step_size: f64) -> String {
+        let scale = self.scale();
+        let displayed = (value - self.offset) / scale;
+        let displayed_step = step_size.abs() / scale.abs();
+        format_axis_decimal(displayed, displayed_step)
+    }
+
+    fn label(self, name: &str) -> String {
+        let mut notes = Vec::with_capacity(2);
+        if self.offset != 0.0 {
+            notes.push(format!("基准 {}", format_axis_reference(self.offset)));
+        }
+        if self.exponent != 0 {
+            notes.push(format!("×10{}", superscript_integer(self.exponent)));
+        }
+        if notes.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name}（{}）", notes.join("；"))
+        }
+    }
+}
+
 struct PendingDeletion {
     dataset_index: usize,
     rows: Vec<usize>,
@@ -2148,6 +2234,14 @@ impl eframe::App for InstPlotLiteApp {
             });
 
         let plot_height = (ui.available_height() - PLOT_BOTTOM_GUTTER).max(220.0);
+        let x_axis_display = AxisDisplay::from_range(plotted_column_range(
+            &self.datasets,
+            column_names.get(self.x_column).map(String::as_str),
+        ));
+        let y_axis_display = AxisDisplay::from_range(plotted_column_range(
+            &self.datasets,
+            column_names.get(self.y_column).map(String::as_str),
+        ));
         let mut plot = Plot::new("main-plot")
             .legend(Legend::default())
             .height(plot_height)
@@ -2155,12 +2249,26 @@ impl eframe::App for InstPlotLiteApp {
             .allow_scroll(false)
             .allow_drag(true)
             .allow_boxed_zoom(false)
-            .pan_pointer_button(PointerButton::Secondary);
+            .pan_pointer_button(PointerButton::Secondary)
+            .x_axis_formatter(move |mark, _range| {
+                x_axis_display.format_tick(mark.value, mark.step_size)
+            })
+            .y_axis_formatter(move |mark, _range| {
+                y_axis_display.format_tick(mark.value, mark.step_size)
+            });
         if let Some(label) = column_names.get(self.x_column) {
-            plot = plot.x_axis_label(egui::RichText::new(label.clone()).size(17.0).strong());
+            plot = plot.x_axis_label(
+                egui::RichText::new(x_axis_display.label(label))
+                    .size(17.0)
+                    .strong(),
+            );
         }
         if let Some(label) = column_names.get(self.y_column) {
-            plot = plot.y_axis_label(egui::RichText::new(label.clone()).size(17.0).strong());
+            plot = plot.y_axis_label(
+                egui::RichText::new(y_axis_display.label(label))
+                    .size(17.0)
+                    .strong(),
+            );
         }
         if self.reset_view {
             plot = plot.reset();
@@ -2384,6 +2492,98 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
         maximum = maximum.max(value);
     }
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
+}
+
+fn plotted_column_range(datasets: &[data::DataSet], column_name: Option<&str>) -> Option<[f64; 2]> {
+    let column_name = column_name?;
+    let mut combined: Option<[f64; 2]> = None;
+    for column in datasets.iter().filter_map(|dataset| {
+        dataset
+            .columns
+            .iter()
+            .find(|column| column.name == column_name)
+    }) {
+        let Some([minimum, maximum]) = finite_range(&column.values) else {
+            continue;
+        };
+        combined = Some(match combined {
+            Some([current_minimum, current_maximum]) => {
+                [current_minimum.min(minimum), current_maximum.max(maximum)]
+            }
+            None => [minimum, maximum],
+        });
+    }
+    combined
+}
+
+fn format_axis_decimal(value: f64, step_size: f64) -> String {
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    let zero_threshold = if step_size.is_finite() && step_size > 0.0 {
+        step_size * 1.0e-9
+    } else {
+        f64::EPSILON
+    };
+    let value = if value.abs() <= zero_threshold {
+        0.0
+    } else {
+        value
+    };
+    let decimals = decimals_for_step(step_size);
+    let formatted = format!("{value:.decimals$}");
+    let trimmed = if formatted.contains('.') {
+        formatted.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        &formatted
+    };
+    if trimmed == "-0" || trimmed.is_empty() {
+        "0".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn decimals_for_step(step_size: f64) -> usize {
+    if !step_size.is_finite() || step_size <= 0.0 {
+        return 3;
+    }
+    for decimals in 0..=8 {
+        let scaled = step_size * 10.0_f64.powi(decimals as i32);
+        if (scaled - scaled.round()).abs() <= scaled.abs().max(1.0) * 1.0e-9 {
+            return decimals;
+        }
+    }
+    ((-step_size.log10()).ceil() as isize + 2).clamp(0, 8) as usize
+}
+
+fn format_axis_reference(value: f64) -> String {
+    let scientific = format!("{value:.12e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+    let exponent = exponent.parse::<i32>().unwrap_or(0);
+    format!("{mantissa}×10{}", superscript_integer(exponent))
+}
+
+fn superscript_integer(value: i32) -> String {
+    value
+        .to_string()
+        .chars()
+        .map(|character| match character {
+            '-' => '⁻',
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            _ => character,
+        })
+        .collect()
 }
 
 fn legend_series_name(name: &str, is_active: bool) -> String {
@@ -2715,8 +2915,9 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        FitOverlay, FitTarget, compact_label, configure_interface_style, demo_curve,
-        legend_series_name, preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
+        AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style, demo_curve,
+        format_axis_decimal, legend_series_name, preferred_import_columns, store_fit_overlay,
+        wheel_zoom_factor,
     };
     use eframe::egui;
 
@@ -2783,6 +2984,32 @@ mod tests {
             "abcdef…xyz"
         );
         assert_eq!(compact_label("short", 10), "short");
+    }
+
+    #[test]
+    fn tiny_axis_ranges_use_a_shared_engineering_scale() {
+        let display = AxisDisplay::from_range(Some([-0.000012, 0.0]));
+        assert_eq!(display.exponent, -6);
+        assert_eq!(display.offset, 0.0);
+        assert_eq!(display.label("2χ"), "2χ（×10⁻⁶）");
+        assert_eq!(display.format_tick(-0.000001, 0.000001), "-1");
+        assert_eq!(display.format_tick(0.0, 0.000001), "0");
+    }
+
+    #[test]
+    fn large_baselines_are_shown_as_small_relative_changes() {
+        let display = AxisDisplay::from_range(Some([10_000_000.001, 10_000_000.011]));
+        assert!((display.offset - 10_000_000.0).abs() < 1.0e-9);
+        assert_eq!(display.exponent, -3);
+        assert_eq!(display.label("signal"), "signal（基准 1×10⁷；×10⁻³）");
+        assert_eq!(display.format_tick(10_000_000.001, 0.001), "1");
+    }
+
+    #[test]
+    fn ordinary_axis_ticks_keep_required_precision_without_trailing_zeroes() {
+        assert_eq!(format_axis_decimal(10.0, 1.0), "10");
+        assert_eq!(format_axis_decimal(1.5, 0.25), "1.5");
+        assert_eq!(format_axis_decimal(-1.0e-15, 0.1), "0");
     }
 
     #[test]
