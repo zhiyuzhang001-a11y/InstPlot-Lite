@@ -44,6 +44,9 @@ pub struct FitCurveExport<'a> {
     pub name: &'a str,
     pub points: &'a [[f64; 2]],
     pub r_squared: f64,
+    pub parent_dataset_id: Option<&'a str>,
+    pub source_x_column: &'a str,
+    pub source_y_column: &'a str,
 }
 
 pub fn suggested_file_stem(dataset: &DataSet) -> String {
@@ -76,7 +79,14 @@ pub fn save_retained_rows_selected_with_fits(
     };
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
-    write_text_export(&mut writer, dataset, columns, fits, format.delimiter())?;
+    write_text_export(
+        &mut writer,
+        dataset,
+        columns,
+        fits,
+        format.delimiter(),
+        false,
+    )?;
     writer.flush().map_err(|error| error.to_string())?;
     Ok(retained_row_count(dataset))
 }
@@ -127,14 +137,24 @@ pub fn save_texts_separate_with_fits(
     }
     let mut reserved_names = HashSet::new();
     let mut row_count = 0_usize;
+    let preserve_links = datasets
+        .iter()
+        .any(|dataset| dataset.kind == DataSetKind::Fit && dataset.fit_link.is_some());
     for (dataset, fits) in datasets.iter().zip(fits_by_dataset) {
         let base = format!("{}-cleaned", dataset_export_base(dataset));
         let path = unique_text_path(directory, &base, format.extension(), &mut reserved_names);
         let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
         let file = File::create(&path).map_err(|error| format!("{}：{error}", path.display()))?;
         let mut writer = BufWriter::new(file);
-        write_text_export(&mut writer, dataset, &columns, fits, format.delimiter())
-            .map_err(|error| format!("{}：{error}", path.display()))?;
+        write_text_export(
+            &mut writer,
+            dataset,
+            &columns,
+            fits,
+            format.delimiter(),
+            preserve_links,
+        )
+        .map_err(|error| format!("{}：{error}", path.display()))?;
         writer
             .flush()
             .map_err(|error| format!("{}：{error}", path.display()))?;
@@ -268,16 +288,48 @@ fn save_workbook_refs_with_columns(
         worksheet
             .write_string(0, 0, format!("# Type: {}", dataset.kind.metadata_value()))
             .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(1, 0, format!("# Dataset-ID: {}", dataset.plot_id))
+            .map_err(|error| error.to_string())?;
+        let mut header_row = 2_u32;
+        if let Some(link) = &dataset.fit_link {
+            worksheet
+                .write_string(
+                    header_row,
+                    0,
+                    format!(
+                        "# Parent-ID: {}",
+                        link.parent_dataset_id.as_deref().unwrap_or("*")
+                    ),
+                )
+                .map_err(|error| error.to_string())?;
+            worksheet
+                .write_string(
+                    header_row + 1,
+                    0,
+                    format!("# Source-X: {}", link.source_x_column),
+                )
+                .map_err(|error| error.to_string())?;
+            worksheet
+                .write_string(
+                    header_row + 2,
+                    0,
+                    format!("# Source-Y: {}", link.source_y_column),
+                )
+                .map_err(|error| error.to_string())?;
+            header_row += 3;
+        }
         for (output_index, source_index) in columns.iter().copied().enumerate() {
             let column = &dataset.columns[source_index];
             let column_index =
                 u16::try_from(output_index).map_err(|_| "列数超过 XLSX 支持范围".to_owned())?;
             worksheet
-                .write_string(1, column_index, &column.name)
+                .write_string(header_row, column_index, &column.name)
                 .map_err(|error| error.to_string())?;
         }
 
-        let mut output_row = 2_u32;
+        let first_data_row = header_row + 1;
+        let mut output_row = first_data_row;
         for row_index in 0..dataset.row_count {
             if !dataset.alive.get(row_index).copied().unwrap_or(false) {
                 continue;
@@ -297,7 +349,7 @@ fn save_workbook_refs_with_columns(
                 .checked_add(1)
                 .ok_or_else(|| "行数超过 XLSX 支持范围".to_owned())?;
         }
-        total_rows += usize::try_from(output_row - 2).unwrap_or(usize::MAX);
+        total_rows += usize::try_from(output_row - first_data_row).unwrap_or(usize::MAX);
     }
 
     for fit in fits {
@@ -309,13 +361,26 @@ fn save_workbook_refs_with_columns(
         worksheet
             .write_string(0, 0, "# Type: fit")
             .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(
+                1,
+                0,
+                format!("# Parent-ID: {}", fit.parent_dataset_id.unwrap_or("*")),
+            )
+            .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(2, 0, format!("# Source-X: {}", fit.source_x_column))
+            .map_err(|error| error.to_string())?;
+        worksheet
+            .write_string(3, 0, format!("# Source-Y: {}", fit.source_y_column))
+            .map_err(|error| error.to_string())?;
         for (column, header) in ["X", "拟合 Y", "R²"].into_iter().enumerate() {
             worksheet
-                .write_string(1, column as u16, header)
+                .write_string(4, column as u16, header)
                 .map_err(|error| error.to_string())?;
         }
         for (row, [x, y]) in fit.points.iter().enumerate() {
-            let row = u32::try_from(row + 2).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
+            let row = u32::try_from(row + 5).map_err(|_| "行数超过 XLSX 支持范围".to_owned())?;
             worksheet
                 .write_number(row, 0, *x)
                 .map_err(|error| error.to_string())?;
@@ -374,8 +439,9 @@ fn write_text_export(
     columns: &[usize],
     fits: &[FitCurveExport<'_>],
     delimiter: u8,
+    force_section: bool,
 ) -> Result<(), String> {
-    if fits.is_empty() && dataset.kind == DataSetKind::Source {
+    if !force_section && fits.is_empty() && dataset.kind == DataSetKind::Source {
         return write_retained_rows_selected(output, dataset, columns, delimiter);
     }
     validate_fit_compatible_selection(dataset, columns, fits)?;
@@ -402,8 +468,25 @@ fn write_source_section(
         .write_all(format!("# Name: {}\n", metadata_text(&dataset.display_name())).as_bytes())
         .map_err(|error| error.to_string())?;
     output
-        .write_all(format!("# Type: {}\n\n", dataset.kind.metadata_value()).as_bytes())
+        .write_all(format!("# Type: {}\n", dataset.kind.metadata_value()).as_bytes())
         .map_err(|error| error.to_string())?;
+    output
+        .write_all(format!("# Dataset-ID: {}\n", metadata_text(&dataset.plot_id)).as_bytes())
+        .map_err(|error| error.to_string())?;
+    if let Some(link) = &dataset.fit_link {
+        output
+            .write_all(
+                format!(
+                    "# Parent-ID: {}\n# Source-X: {}\n# Source-Y: {}\n",
+                    link.parent_dataset_id.as_deref().unwrap_or("*"),
+                    metadata_text(&link.source_x_column),
+                    metadata_text(&link.source_y_column),
+                )
+                .as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    output.write_all(b"\n").map_err(|error| error.to_string())?;
     write_retained_rows_selected(output, dataset, columns, delimiter)?;
     output.write_all(b"\n").map_err(|error| error.to_string())?;
     output
@@ -425,7 +508,15 @@ fn write_fit_section(
         .write_all(format!("# Name: {}\n", metadata_text(fit.name)).as_bytes())
         .map_err(|error| error.to_string())?;
     output
-        .write_all(b"# Type: fit\n\n")
+        .write_all(
+            format!(
+                "# Type: fit\n# Parent-ID: {}\n# Source-X: {}\n# Source-Y: {}\n\n",
+                fit.parent_dataset_id.unwrap_or("*"),
+                metadata_text(fit.source_x_column),
+                metadata_text(fit.source_y_column),
+            )
+            .as_bytes(),
+        )
         .map_err(|error| error.to_string())?;
     {
         let mut writer = csv::WriterBuilder::new()
@@ -525,6 +616,30 @@ fn validate_fit_compatible_selection(
 ) -> Result<(), String> {
     if (dataset.kind == DataSetKind::Fit || !fits.is_empty()) && columns.len() < 2 {
         return Err("包含拟合结果时，请至少选择两列原始数据，以便文件能够重新导入".to_owned());
+    }
+    if dataset.kind == DataSetKind::Fit
+        && dataset.fit_link.is_some()
+        && (!columns.contains(&0) || !columns.contains(&1))
+    {
+        return Err("导出关联拟合时必须保留 X 和拟合 Y 两列，以便重新导入后正确叠加".to_owned());
+    }
+    for fit in fits {
+        let x_column = dataset
+            .columns
+            .iter()
+            .position(|column| column.name == fit.source_x_column);
+        let y_column = dataset
+            .columns
+            .iter()
+            .position(|column| column.name == fit.source_y_column);
+        if x_column.is_none_or(|index| !columns.contains(&index))
+            || y_column.is_none_or(|index| !columns.contains(&index))
+        {
+            return Err(format!(
+                "导出拟合“{}”时必须保留原始列“{}”和“{}”，以便重新导入后正确叠加",
+                fit.name, fit.source_x_column, fit.source_y_column
+            ));
+        }
     }
     Ok(())
 }
@@ -636,10 +751,10 @@ mod tests {
     use super::{
         FitCurveExport, TextExportFormat, encode_retained_rows, encode_retained_rows_selected,
         save_all_text, save_all_text_combined, save_retained_rows_selected_with_fits,
-        save_text_combined, save_workbook, save_workbook_with_fits,
+        save_text_combined, save_texts_separate_with_fits, save_workbook, save_workbook_with_fits,
         save_workbooks_separate_with_fits,
     };
-    use crate::data::{DataSet, DataSetKind, NumericColumn, read_data_file};
+    use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn, read_data_file};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -650,6 +765,8 @@ mod tests {
             source: PathBuf::from(name),
             label: None,
             kind: DataSetKind::Source,
+            plot_id: format!("test-{name}"),
+            fit_link: None,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![
@@ -704,6 +821,9 @@ mod tests {
                 name: "sample · 拟合 1",
                 points: &points,
                 r_squared: 0.98,
+                parent_dataset_id: Some("test-sample.csv"),
+                source_x_column: "磁场,Oe",
+                source_y_column: "信号",
             }],
         )
         .unwrap();
@@ -715,6 +835,11 @@ mod tests {
         assert_eq!(imported.len(), 2);
         assert_eq!(imported[0].kind, DataSetKind::Source);
         assert_eq!(imported[1].kind, DataSetKind::Fit);
+        assert_eq!(imported[0].plot_id, "test-sample.csv");
+        let link = imported[1].fit_link.as_ref().unwrap();
+        assert_eq!(link.parent_dataset_id.as_deref(), Some("test-sample.csv"));
+        assert_eq!(link.source_x_column, "磁场,Oe");
+        assert_eq!(link.source_y_column, "信号");
         assert_eq!(imported[0].columns[0].values, [1.0, 3.0]);
         assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         std::fs::remove_dir_all(directory).unwrap();
@@ -734,6 +859,9 @@ mod tests {
                     name: "sample fitted",
                     points: &points,
                     r_squared: 0.98,
+                    parent_dataset_id: Some("test-sample.csv"),
+                    source_x_column: "磁场,Oe",
+                    source_y_column: "信号",
                 }],
             )
             .unwrap();
@@ -743,6 +871,47 @@ mod tests {
             assert_eq!(imported[1].kind, DataSetKind::Fit);
             assert_eq!(imported[1].columns[1].values, [1.0, 3.0]);
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn separate_text_files_preserve_source_fit_links() {
+        let directory = temporary_directory("separate-linked-curves");
+        let source = dataset("source.csv");
+        let mut fit = dataset("fit.csv");
+        fit.kind = DataSetKind::Fit;
+        fit.plot_id = "fit-id".to_owned();
+        fit.fit_link = Some(FitLink {
+            parent_dataset_id: Some(source.plot_id.clone()),
+            source_x_column: "磁场,Oe".to_owned(),
+            source_y_column: "信号".to_owned(),
+        });
+        fit.columns[0].name = "X".to_owned();
+        fit.columns[1].name = "拟合 Y".to_owned();
+
+        save_texts_separate_with_fits(
+            &directory,
+            &[&source, &fit],
+            TextExportFormat::Csv,
+            &[Vec::new(), Vec::new()],
+        )
+        .unwrap();
+
+        let mut imported = std::fs::read_dir(&directory)
+            .unwrap()
+            .flat_map(|entry| read_data_file(&entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        imported.sort_by_key(|dataset| dataset.kind == DataSetKind::Fit);
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].plot_id, source.plot_id);
+        let link = imported[1].fit_link.as_ref().unwrap();
+        assert_eq!(
+            link.parent_dataset_id.as_deref(),
+            Some(source.plot_id.as_str())
+        );
+        assert_eq!(link.source_x_column, "磁场,Oe");
+        assert_eq!(link.source_y_column, "信号");
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -760,12 +929,44 @@ mod tests {
                     name: "sample fitted",
                     points: &points,
                     r_squared: 0.98,
+                    parent_dataset_id: Some("test-sample.csv"),
+                    source_x_column: "磁场,Oe",
+                    source_y_column: "信号",
                 }],
             )
             .unwrap_err();
             assert!(error.contains("至少选择两列"));
             assert!(!path.exists());
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fit_export_requires_the_linked_source_columns() {
+        let directory = temporary_directory("missing-linked-column");
+        let path = directory.join("missing-y.csv");
+        let points = [[0.0, 1.0], [1.0, 3.0]];
+        let mut source = dataset("sample.csv");
+        source.columns.push(NumericColumn {
+            name: "other".to_owned(),
+            values: vec![7.0, 8.0, 9.0],
+        });
+        let error = save_retained_rows_selected_with_fits(
+            &path,
+            &source,
+            &[0, 2],
+            &[FitCurveExport {
+                name: "sample fitted",
+                points: &points,
+                r_squared: 0.98,
+                parent_dataset_id: Some("test-sample.csv"),
+                source_x_column: "磁场,Oe",
+                source_y_column: "信号",
+            }],
+        )
+        .unwrap_err();
+        assert!(error.contains("必须保留原始列"));
+        assert!(!path.exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -801,6 +1002,9 @@ mod tests {
                     name: "final fit",
                     points: &points,
                     r_squared: 0.98,
+                    parent_dataset_id: Some("test-first.csv"),
+                    source_x_column: "磁场,Oe",
+                    source_y_column: "信号",
                 }],
             )
             .unwrap();
@@ -864,6 +1068,9 @@ mod tests {
                 name: "sample fitted",
                 points: &points,
                 r_squared: 0.98,
+                parent_dataset_id: Some("test-sample.csv"),
+                source_x_column: "磁场,Oe",
+                source_y_column: "信号",
             }],
         )
         .unwrap();
@@ -872,6 +1079,11 @@ mod tests {
         assert_eq!(imported.len(), 2);
         assert_eq!(imported[0].kind, DataSetKind::Source);
         assert_eq!(imported[1].kind, DataSetKind::Fit);
+        assert_eq!(imported[0].plot_id, "test-sample.csv");
+        let link = imported[1].fit_link.as_ref().unwrap();
+        assert_eq!(link.parent_dataset_id.as_deref(), Some("test-sample.csv"));
+        assert_eq!(link.source_x_column, "磁场,Oe");
+        assert_eq!(link.source_y_column, "信号");
         assert!(imported[0].display_name().contains("sample"));
         assert!(imported[1].display_name().contains("sample fitted"));
         assert_eq!(imported[1].columns[0].values, [0.0, 1.0]);

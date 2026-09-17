@@ -336,6 +336,8 @@ mod tests {
             source: PathBuf::from("sample.csv"),
             label: None,
             kind: DataSetKind::Source,
+            plot_id: "test-history".to_owned(),
+            fit_link: None,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![

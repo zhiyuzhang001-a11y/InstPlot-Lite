@@ -788,6 +788,13 @@ impl InstPlotLiteApp {
                 name: &fit.name,
                 points: &fit.points,
                 r_squared: fit.r2,
+                parent_dataset_id: fit
+                    .target
+                    .dataset_index
+                    .and_then(|index| self.datasets.get(index))
+                    .map(|dataset| dataset.plot_id.as_str()),
+                source_x_column: &fit.target.x_column_name,
+                source_y_column: &fit.target.y_column_name,
             })
             .collect::<Vec<_>>();
         let result = if let Some(format) = settings.format.text_format() {
@@ -822,6 +829,13 @@ impl InstPlotLiteApp {
                 name: &fit.name,
                 points: &fit.points,
                 r_squared: fit.r2,
+                parent_dataset_id: fit
+                    .target
+                    .dataset_index
+                    .and_then(|index| self.datasets.get(index))
+                    .map(|dataset| dataset.plot_id.as_str()),
+                source_x_column: &fit.target.x_column_name,
+                source_y_column: &fit.target.y_column_name,
             })
             .collect()
     }
@@ -1976,6 +1990,17 @@ impl InstPlotLiteApp {
             self.reset_after_coordinate_change();
         }
 
+        let linked_fit = self
+            .datasets
+            .get(self.active_dataset)
+            .is_some_and(|dataset| {
+                dataset.kind == data::DataSetKind::Fit && dataset.fit_link.is_some()
+            });
+        if linked_fit {
+            self.x_column = 0;
+            self.y_column = 1;
+        }
+
         let column_names = self.column_names();
         let previous_columns = (self.x_column, self.y_column);
         let column_combo =
@@ -1998,16 +2023,27 @@ impl InstPlotLiteApp {
             let control_width = (ui.available_width() - 10.0).max(100.0);
             ui.add_space(8.0);
             ui.label("X 列");
-            column_combo(ui, "x-column", &mut self.x_column, control_width);
+            ui.add_enabled_ui(!linked_fit, |ui| {
+                column_combo(ui, "x-column", &mut self.x_column, control_width);
+            });
             ui.add_space(6.0);
             ui.label("Y 列");
-            column_combo(ui, "y-column", &mut self.y_column, control_width);
+            ui.add_enabled_ui(!linked_fit, |ui| {
+                column_combo(ui, "y-column", &mut self.y_column, control_width);
+            });
+            if linked_fit {
+                ui.small("关联拟合固定使用 X / 拟合 Y，并按原始列叠加。");
+            }
         } else {
             ui.horizontal_wrapped(|ui| {
                 ui.label("X 列");
-                column_combo(ui, "x-column", &mut self.x_column, 120.0);
+                ui.add_enabled_ui(!linked_fit, |ui| {
+                    column_combo(ui, "x-column", &mut self.x_column, 120.0);
+                });
                 ui.label("Y 列");
-                column_combo(ui, "y-column", &mut self.y_column, 120.0);
+                ui.add_enabled_ui(!linked_fit, |ui| {
+                    column_combo(ui, "y-column", &mut self.y_column, 120.0);
+                });
                 ui.separator();
                 ui.label("左键点选/框选删除 · 滚轮缩放 · 右键拖动平移");
             });
@@ -2234,13 +2270,37 @@ impl eframe::App for InstPlotLiteApp {
             });
 
         let plot_height = (ui.available_height() - PLOT_BOTTOM_GUTTER).max(220.0);
-        let x_axis_display = AxisDisplay::from_range(plotted_column_range(
+        let (plot_x_name, plot_y_name) = plot_coordinate_names(
             &self.datasets,
-            column_names.get(self.x_column).map(String::as_str),
+            self.active_dataset,
+            self.x_column,
+            self.y_column,
+        )
+        .unwrap_or_else(|| {
+            (
+                column_names
+                    .get(self.x_column)
+                    .cloned()
+                    .unwrap_or_else(|| "x".to_owned()),
+                column_names
+                    .get(self.y_column)
+                    .cloned()
+                    .unwrap_or_else(|| "y".to_owned()),
+            )
+        });
+        let x_axis_display = AxisDisplay::from_range(plotted_axis_range(
+            &self.datasets,
+            self.active_dataset,
+            &plot_x_name,
+            &plot_y_name,
+            0,
         ));
-        let y_axis_display = AxisDisplay::from_range(plotted_column_range(
+        let y_axis_display = AxisDisplay::from_range(plotted_axis_range(
             &self.datasets,
-            column_names.get(self.y_column).map(String::as_str),
+            self.active_dataset,
+            &plot_x_name,
+            &plot_y_name,
+            1,
         ));
         let mut plot = Plot::new("main-plot")
             .legend(Legend::default())
@@ -2256,20 +2316,16 @@ impl eframe::App for InstPlotLiteApp {
             .y_axis_formatter(move |mark, _range| {
                 y_axis_display.format_tick(mark.value, mark.step_size)
             });
-        if let Some(label) = column_names.get(self.x_column) {
-            plot = plot.x_axis_label(
-                egui::RichText::new(x_axis_display.label(label))
-                    .size(17.0)
-                    .strong(),
-            );
-        }
-        if let Some(label) = column_names.get(self.y_column) {
-            plot = plot.y_axis_label(
-                egui::RichText::new(y_axis_display.label(label))
-                    .size(17.0)
-                    .strong(),
-            );
-        }
+        plot = plot.x_axis_label(
+            egui::RichText::new(x_axis_display.label(&plot_x_name))
+                .size(17.0)
+                .strong(),
+        );
+        plot = plot.y_axis_label(
+            egui::RichText::new(y_axis_display.label(&plot_y_name))
+                .size(17.0)
+                .strong(),
+        );
         if self.reset_view {
             plot = plot.reset();
             self.reset_view = false;
@@ -2297,22 +2353,14 @@ impl eframe::App for InstPlotLiteApp {
                     );
                     return;
                 }
-                let x_name = column_names.get(self.x_column);
-                let y_name = column_names.get(self.y_column);
                 for (dataset_index, dataset) in self.datasets.iter().enumerate() {
-                    let x_column = x_name.and_then(|name| {
-                        dataset
-                            .columns
-                            .iter()
-                            .position(|column| &column.name == name)
-                    });
-                    let y_column = y_name.and_then(|name| {
-                        dataset
-                            .columns
-                            .iter()
-                            .position(|column| &column.name == name)
-                    });
-                    let (Some(x_column), Some(y_column)) = (x_column, y_column) else {
+                    let Some((x_column, y_column)) = dataset_plot_columns(
+                        &self.datasets,
+                        dataset_index,
+                        self.active_dataset,
+                        &plot_x_name,
+                        &plot_y_name,
+                    ) else {
                         continue;
                     };
                     let point_limit = self
@@ -2494,15 +2542,84 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
 }
 
-fn plotted_column_range(datasets: &[data::DataSet], column_name: Option<&str>) -> Option<[f64; 2]> {
-    let column_name = column_name?;
+fn plot_coordinate_names(
+    datasets: &[data::DataSet],
+    active_dataset: usize,
+    x_column: usize,
+    y_column: usize,
+) -> Option<(String, String)> {
+    let active = datasets.get(active_dataset)?;
+    if active.kind == data::DataSetKind::Fit
+        && let Some(link) = &active.fit_link
+    {
+        return Some((link.source_x_column.clone(), link.source_y_column.clone()));
+    }
+    Some((
+        active.columns.get(x_column)?.name.clone(),
+        active.columns.get(y_column)?.name.clone(),
+    ))
+}
+
+fn dataset_plot_columns(
+    datasets: &[data::DataSet],
+    dataset_index: usize,
+    active_dataset: usize,
+    x_name: &str,
+    y_name: &str,
+) -> Option<(usize, usize)> {
+    let dataset = datasets.get(dataset_index)?;
+    if dataset.kind == data::DataSetKind::Fit
+        && let Some(link) = &dataset.fit_link
+    {
+        if link.source_x_column != x_name || link.source_y_column != y_name {
+            return None;
+        }
+        let parent_is_loaded = link.parent_dataset_id.as_ref().is_none_or(|parent_id| {
+            datasets.iter().any(|candidate| {
+                candidate.kind == data::DataSetKind::Source
+                    && candidate.plot_id == *parent_id
+                    && candidate.columns.iter().any(|column| column.name == x_name)
+                    && candidate.columns.iter().any(|column| column.name == y_name)
+            })
+        });
+        return (dataset_index == active_dataset || parent_is_loaded)
+            .then_some((0, 1))
+            .filter(|(x, y)| {
+                dataset.columns.get(*x).is_some() && dataset.columns.get(*y).is_some()
+            });
+    }
+
+    let x_column = dataset
+        .columns
+        .iter()
+        .position(|column| column.name == x_name)?;
+    let y_column = dataset
+        .columns
+        .iter()
+        .position(|column| column.name == y_name)?;
+    Some((x_column, y_column))
+}
+
+fn plotted_axis_range(
+    datasets: &[data::DataSet],
+    active_dataset: usize,
+    x_name: &str,
+    y_name: &str,
+    axis: usize,
+) -> Option<[f64; 2]> {
     let mut combined: Option<[f64; 2]> = None;
-    for column in datasets.iter().filter_map(|dataset| {
-        dataset
+    for (dataset_index, dataset) in datasets.iter().enumerate() {
+        let Some((x_column, y_column)) =
+            dataset_plot_columns(datasets, dataset_index, active_dataset, x_name, y_name)
+        else {
+            continue;
+        };
+        let Some(column) = dataset
             .columns
-            .iter()
-            .find(|column| column.name == column_name)
-    }) {
+            .get(if axis == 0 { x_column } else { y_column })
+        else {
+            continue;
+        };
         let Some([minimum, maximum]) = finite_range(&column.values) else {
             continue;
         };
@@ -2894,11 +3011,13 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style, demo_curve,
-        format_axis_decimal, legend_series_name, preferred_import_columns, store_fit_overlay,
-        wheel_zoom_factor,
+        AxisDisplay, FitOverlay, FitTarget, compact_label, configure_interface_style,
+        dataset_plot_columns, demo_curve, format_axis_decimal, legend_series_name,
+        plot_coordinate_names, preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
     };
+    use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
+    use std::path::PathBuf;
 
     #[test]
     fn interface_style_always_uses_dark_theme() {
@@ -2989,6 +3108,82 @@ mod tests {
         assert_eq!(format_axis_decimal(10.0, 1.0), "10");
         assert_eq!(format_axis_decimal(1.5, 0.25), "1.5");
         assert_eq!(format_axis_decimal(-1.0e-15, 0.1), "0");
+    }
+
+    #[test]
+    fn imported_fit_uses_its_source_axes_and_overlays_the_parent_curve() {
+        let source = DataSet {
+            source: PathBuf::from("source.csv"),
+            label: Some("source".to_owned()),
+            kind: DataSetKind::Source,
+            plot_id: "source-id".to_owned(),
+            fit_link: None,
+            encoding: "UTF-8".to_owned(),
+            separator: ",".to_owned(),
+            columns: vec![
+                NumericColumn {
+                    name: "Theta".to_owned(),
+                    values: vec![0.0, 1.0],
+                },
+                NumericColumn {
+                    name: "2-X".to_owned(),
+                    values: vec![1.0, 2.0],
+                },
+            ],
+            row_count: 2,
+            alive: vec![true; 2],
+        };
+        let fit = DataSet {
+            source: PathBuf::from("fit.csv"),
+            label: Some("fit".to_owned()),
+            kind: DataSetKind::Fit,
+            plot_id: "fit-id".to_owned(),
+            fit_link: Some(FitLink {
+                parent_dataset_id: Some("source-id".to_owned()),
+                source_x_column: "Theta".to_owned(),
+                source_y_column: "2-X".to_owned(),
+            }),
+            encoding: "UTF-8".to_owned(),
+            separator: ",".to_owned(),
+            columns: vec![
+                NumericColumn {
+                    name: "X".to_owned(),
+                    values: vec![0.0, 1.0],
+                },
+                NumericColumn {
+                    name: "拟合 Y".to_owned(),
+                    values: vec![1.1, 1.9],
+                },
+                NumericColumn {
+                    name: "R²".to_owned(),
+                    values: vec![0.99, 0.99],
+                },
+            ],
+            row_count: 2,
+            alive: vec![true; 2],
+        };
+        let datasets = vec![source, fit];
+
+        assert_eq!(
+            plot_coordinate_names(&datasets, 0, 0, 1),
+            Some(("Theta".to_owned(), "2-X".to_owned()))
+        );
+        assert_eq!(
+            dataset_plot_columns(&datasets, 0, 0, "Theta", "2-X"),
+            Some((0, 1))
+        );
+        assert_eq!(
+            dataset_plot_columns(&datasets, 1, 0, "Theta", "2-X"),
+            Some((0, 1))
+        );
+        assert_eq!(
+            plot_coordinate_names(&datasets, 1, 0, 1),
+            Some(("Theta".to_owned(), "2-X".to_owned()))
+        );
+        assert_eq!(
+            dataset_plot_columns(&datasets, 0, 1, "Theta", "2-X"),
+            Some((0, 1))
+        );
     }
 
     #[test]

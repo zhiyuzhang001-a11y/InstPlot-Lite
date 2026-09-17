@@ -757,6 +757,8 @@ mod tests {
             source: PathBuf::from("processing.csv"),
             label: None,
             kind: DataSetKind::Source,
+            plot_id: "test-processing".to_owned(),
+            fit_link: None,
             encoding: "UTF-8".to_owned(),
             separator: ",".to_owned(),
             columns: vec![

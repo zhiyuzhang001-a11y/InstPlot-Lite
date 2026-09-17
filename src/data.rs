@@ -16,6 +16,13 @@ pub struct NumericColumn {
     pub values: Vec<f64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FitLink {
+    pub parent_dataset_id: Option<String>,
+    pub source_x_column: String,
+    pub source_y_column: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DataSetKind {
     #[default]
@@ -37,11 +44,33 @@ pub struct DataSet {
     pub source: PathBuf,
     pub label: Option<String>,
     pub kind: DataSetKind,
+    pub plot_id: String,
+    pub fit_link: Option<FitLink>,
     pub encoding: String,
     pub separator: String,
     pub columns: Vec<NumericColumn>,
     pub row_count: usize,
     pub alive: Vec<bool>,
+}
+
+fn generated_plot_id(path: &Path, columns: &[NumericColumn]) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x00000100000001b3;
+    let mut hash = OFFSET_BASIS;
+    let mut update = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    };
+    update(path.to_string_lossy().as_bytes());
+    for column in columns {
+        update(column.name.as_bytes());
+        for value in &column.values {
+            update(&value.to_bits().to_le_bytes());
+        }
+    }
+    format!("instplot-{hash:016x}")
 }
 
 impl DataSet {
@@ -429,10 +458,15 @@ fn spreadsheet_range_to_dataset(
         ));
     }
 
+    let kind = spreadsheet_dataset_kind(&rows[..data_position])?;
+    let (stored_plot_id, fit_link) = spreadsheet_plot_metadata(&rows[..data_position], kind)?;
+    let plot_id = stored_plot_id.unwrap_or_else(|| generated_plot_id(path, &columns));
     Ok(DataSet {
         source: path.to_path_buf(),
         label: None,
-        kind: spreadsheet_dataset_kind(&rows[..data_position])?,
+        kind,
+        plot_id,
+        fit_link,
         encoding: "Excel 工作簿".to_owned(),
         separator: format!("工作表 {sheet_name}"),
         columns,
@@ -497,6 +531,52 @@ fn spreadsheet_dataset_kind(metadata_rows: &[&[Data]]) -> Result<DataSetKind, Im
     Ok(kind.unwrap_or_default())
 }
 
+fn spreadsheet_plot_metadata(
+    metadata_rows: &[&[Data]],
+    kind: DataSetKind,
+) -> Result<(Option<String>, Option<FitLink>), ImportError> {
+    let mut dataset_id = None;
+    let mut parent_id = None;
+    let mut source_x = None;
+    let mut source_y = None;
+    for row in metadata_rows {
+        let Some(text) = row.first().map(spreadsheet_cell_text) else {
+            continue;
+        };
+        let trimmed = text.trim();
+        let value = |prefix: &str| {
+            trimmed
+                .strip_prefix(prefix)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        dataset_id = value("# Dataset-ID:").or(dataset_id);
+        parent_id = value("# Parent-ID:").or(parent_id);
+        source_x = value("# Source-X:").or(source_x);
+        source_y = value("# Source-Y:").or(source_y);
+    }
+    let fit_link = match (parent_id, source_x, source_y) {
+        (None, None, None) => None,
+        (Some(parent), Some(source_x_column), Some(source_y_column))
+            if kind == DataSetKind::Fit =>
+        {
+            Some(FitLink {
+                parent_dataset_id: (parent != "*").then_some(parent),
+                source_x_column,
+                source_y_column,
+            })
+        }
+        _ => {
+            return Err(ImportError::new(
+                "incomplete_fit_link",
+                "拟合关联元数据必须同时包含 Parent-ID、Source-X 和 Source-Y",
+            ));
+        }
+    };
+    Ok((dataset_id, fit_link))
+}
+
 #[cfg(test)]
 fn read_data_bytes(path: &Path, bytes: &[u8]) -> Result<DataSet, ImportError> {
     let (text, encoding) = decode_text(bytes)?;
@@ -523,6 +603,10 @@ fn parse_text_datasets(
     let mut datasets = Vec::new();
     let mut section_name = None::<String>;
     let mut section_kind = None::<DataSetKind>;
+    let mut section_dataset_id = None::<String>;
+    let mut section_parent_id = None::<String>;
+    let mut section_source_x = None::<String>;
+    let mut section_source_y = None::<String>;
     let mut section_lines = Vec::<&str>::new();
     let mut section_start = 0_usize;
 
@@ -538,6 +622,10 @@ fn parse_text_datasets(
             }
             section_name = Some(format!("数据区 {}", datasets.len() + 1));
             section_kind = None;
+            section_dataset_id = None;
+            section_parent_id = None;
+            section_source_x = None;
+            section_source_y = None;
             section_lines.clear();
             section_start = line_index + 1;
             continue;
@@ -559,6 +647,32 @@ fn parse_text_datasets(
                 })?;
             dataset.label = Some(format!("{file_name} — {name}"));
             dataset.kind = section_kind.take().unwrap_or_default();
+            if let Some(dataset_id) = section_dataset_id.take() {
+                dataset.plot_id = dataset_id;
+            }
+            dataset.fit_link = match (
+                section_parent_id.take(),
+                section_source_x.take(),
+                section_source_y.take(),
+            ) {
+                (None, None, None) => None,
+                (Some(parent), Some(source_x_column), Some(source_y_column))
+                    if dataset.kind == DataSetKind::Fit =>
+                {
+                    Some(FitLink {
+                        parent_dataset_id: (parent != "*").then_some(parent),
+                        source_x_column,
+                        source_y_column,
+                    })
+                }
+                _ => {
+                    return Err(ImportError::at_line(
+                        "incomplete_fit_link",
+                        line_index + 1,
+                        "拟合关联元数据必须同时包含 Parent-ID、Source-X 和 Source-Y",
+                    ));
+                }
+            };
             datasets.push(dataset);
             section_lines.clear();
             continue;
@@ -580,6 +694,26 @@ fn parse_text_datasets(
                 section_kind = Some(parse_dataset_kind(value).map_err(|reason| {
                     ImportError::at_line("invalid_section_type", line_index + 1, reason)
                 })?);
+            } else if let Some(value) = trimmed.strip_prefix("# Dataset-ID:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_dataset_id = Some(value.to_owned());
+                }
+            } else if let Some(value) = trimmed.strip_prefix("# Parent-ID:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_parent_id = Some(value.to_owned());
+                }
+            } else if let Some(value) = trimmed.strip_prefix("# Source-X:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_source_x = Some(value.to_owned());
+                }
+            } else if let Some(value) = trimmed.strip_prefix("# Source-Y:") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    section_source_y = Some(value.to_owned());
+                }
             } else {
                 section_lines.push(line);
             }
@@ -758,10 +892,13 @@ fn parse_text(path: &Path, text: &str, encoding: String) -> Result<DataSet, Impo
         ));
     }
 
+    let plot_id = generated_plot_id(path, &columns);
     Ok(DataSet {
         source: path.to_path_buf(),
         label: None,
         kind: DataSetKind::Source,
+        plot_id,
+        fit_link: None,
         encoding,
         separator: separator.label(),
         columns,
