@@ -4,7 +4,7 @@ use eframe::egui::{
     self, Color32, PointerButton, Rect, Stroke, StrokeKind,
     containers::scroll_area::{ScrollBarVisibility, ScrollSource},
 };
-use egui_plot::{Legend, Line, Plot, PlotPoint, Points};
+use egui_plot::{Legend, Line, Plot, PlotMemory, PlotPoint, Points};
 
 use crate::{
     data, data_export,
@@ -2520,7 +2520,12 @@ impl eframe::App for InstPlotLiteApp {
             &plot_y_name,
             1,
         ));
+        let plot_id = egui::Id::new("main-plot");
+        let hidden_series_before = PlotMemory::load(ui.ctx(), plot_id)
+            .map(|memory| memory.hidden_items)
+            .unwrap_or_default();
         let mut plot = Plot::new("main-plot")
+            .id(plot_id)
             .legend(Legend::default())
             .height(plot_height)
             .allow_zoom(true)
@@ -2548,6 +2553,7 @@ impl eframe::App for InstPlotLiteApp {
             plot = plot.reset();
             self.reset_view = false;
         }
+        let mut plotted_series_ids = Vec::new();
         let plot_row = ui.horizontal(|ui| {
             // egui_plot paints the vertical axis title just outside its own
             // plot rectangle, so reserve a real gutter inside the viewport.
@@ -2563,9 +2569,17 @@ impl eframe::App for InstPlotLiteApp {
                 }
                 if self.datasets.is_empty() {
                     let color = series_color(0);
-                    plot_ui.line(Line::new("示例曲线", self.demo_points.clone()).color(color));
+                    let series_name = "示例曲线";
+                    let series_id = egui::Id::new("demo-curve-series");
+                    plotted_series_ids.push(series_id);
+                    plot_ui.line(
+                        Line::new(series_name, self.demo_points.clone())
+                            .id(series_id)
+                            .color(color),
+                    );
                     plot_ui.points(
-                        Points::new("", self.demo_points.clone())
+                        Points::new(series_name, self.demo_points.clone())
+                            .id(series_id)
                             .color(color)
                             .radius(3.5),
                     );
@@ -2589,19 +2603,26 @@ impl eframe::App for InstPlotLiteApp {
                     if !points.is_empty() {
                         let color = series_color(dataset_index);
                         let is_active = dataset_index == self.active_dataset;
+                        let series_name = legend_series_name(&dataset.display_name(), is_active);
+                        let series_id = egui::Id::new((
+                            "data-curve-series",
+                            dataset.plot_id.as_str(),
+                            x_column,
+                            y_column,
+                        ));
+                        plotted_series_ids.push(series_id);
                         plot_ui.line(
-                            Line::new(
-                                legend_series_name(&dataset.display_name(), is_active),
-                                points.clone(),
-                            )
-                            .color(color)
-                            .width(if is_active { 3.0 } else { 1.2 }),
+                            Line::new(series_name.clone(), points.clone())
+                                .id(series_id)
+                                .color(color)
+                                .width(if is_active { 3.0 } else { 1.2 }),
                         );
-                        plot_ui.points(Points::new("", points).color(color).radius(if is_active {
-                            4.5
-                        } else {
-                            2.5
-                        }));
+                        plot_ui.points(
+                            Points::new(series_name, points)
+                                .id(series_id)
+                                .color(color)
+                                .radius(if is_active { 4.5 } else { 2.5 }),
+                        );
                     }
                     if let Some(pending) = self
                         .pending_deletion
@@ -2637,8 +2658,18 @@ impl eframe::App for InstPlotLiteApp {
                     fit_overlay_matches_coordinates(fit, &self.datasets, &plot_x_name, &plot_y_name)
                 }) {
                     let is_active = fit.target.dataset_index == Some(self.active_dataset);
+                    let fit_name = legend_series_name(&fit.name, is_active);
+                    let fit_id = egui::Id::new((
+                        "fit-curve-series",
+                        fit.target.dataset_index,
+                        fit.target.source_dataset_ids.as_slice(),
+                        fit.target.x_column_name.as_str(),
+                        fit.target.y_column_name.as_str(),
+                    ));
+                    plotted_series_ids.push(fit_id);
                     plot_ui.line(
-                        Line::new(legend_series_name(&fit.name, is_active), fit.points.clone())
+                        Line::new(fit_name, fit.points.clone())
+                            .id(fit_id)
                             .color(fit_color(fit_index))
                             .width(if is_active { 3.5 } else { 1.8 }),
                     );
@@ -2683,7 +2714,19 @@ impl eframe::App for InstPlotLiteApp {
         let response = plot_row.inner;
         self.last_plot_rect = Some(response.response.rect);
         let bounds = response.transform.bounds();
-        self.visible_x_range = Some([bounds.min()[0], bounds.max()[0]]);
+        let all_series_hidden_before = !plotted_series_ids.is_empty()
+            && plotted_series_ids
+                .iter()
+                .all(|series_id| hidden_series_before.contains(series_id));
+        let all_series_hidden_after = !plotted_series_ids.is_empty()
+            && PlotMemory::load(ui.ctx(), plot_id).is_some_and(|memory| {
+                plotted_series_ids
+                    .iter()
+                    .all(|series_id| memory.hidden_items.contains(series_id))
+            });
+        if !all_series_hidden_before && !all_series_hidden_after {
+            self.visible_x_range = Some([bounds.min()[0], bounds.max()[0]]);
+        }
 
         if self.pending_deletion.is_none() {
             if response.response.drag_started_by(PointerButton::Primary) {
