@@ -62,9 +62,12 @@ impl AxisDisplay {
         } else {
             0
         };
+        // Keep ordinary labels to at most five integer digits or four
+        // fractional leading places. Beyond that, a shared engineering scale
+        // is easier to scan and avoids wide tick labels.
         let exponent = if (offset != 0.0 && engineering_exponent != 0)
-            || magnitude >= 1_000_000.0
-            || (magnitude > 0.0 && magnitude < 0.0001)
+            || magnitude >= 100_000.0
+            || (magnitude > 0.0 && magnitude < 0.001)
         {
             engineering_exponent
         } else {
@@ -3159,6 +3162,31 @@ mod tests {
         assert_eq!(display.label("2χ"), "2χ（×10^(-6)）");
         assert_eq!(display.format_tick(-0.000001, 0.000001), "-1");
         assert_eq!(display.format_tick(0.0, 0.000001), "0");
+    }
+
+    #[test]
+    fn five_decimal_axis_values_use_a_shared_engineering_scale() {
+        let display = AxisDisplay::from_range(Some([0.00001, 0.00015]));
+        assert_eq!(display.exponent, -6);
+        assert_eq!(display.label("1-X"), "1-X（×10^(-6)）");
+        assert_eq!(display.format_tick(0.00012, 0.00001), "120");
+    }
+
+    #[test]
+    fn six_digit_axis_values_use_a_shared_engineering_scale() {
+        let display = AxisDisplay::from_range(Some([100_000.0, 150_000.0]));
+        assert_eq!(display.exponent, 3);
+        assert_eq!(display.label("signal"), "signal（×10^(3)）");
+        assert_eq!(display.format_tick(120_000.0, 10_000.0), "120");
+    }
+
+    #[test]
+    fn readable_axis_values_stay_in_ordinary_notation() {
+        assert_eq!(AxisDisplay::from_range(Some([0.001, 0.009])).exponent, 0);
+        assert_eq!(
+            AxisDisplay::from_range(Some([10_000.0, 99_999.0])).exponent,
+            0
+        );
     }
 
     #[test]
