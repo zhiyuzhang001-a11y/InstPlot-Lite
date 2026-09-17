@@ -2287,27 +2287,34 @@ impl InstPlotLiteApp {
             ui.add_space(8.0);
             ui.separator();
             ui.strong("拟合结果");
-            for (index, (display_equation, precise_equation, r2)) in
-                fit_details.into_iter().enumerate()
-            {
-                if index > 0 {
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                }
-                let (formula, parameters) = Self::split_fit_display_equation(&display_equation);
-                ui.add(egui::Label::new(formula).wrap())
-                    .on_hover_text(format!("完整精度：{precise_equation}"));
-                if let Some(parameters) = parameters {
-                    ui.add_space(5.0);
-                    ui.add(egui::Label::new(egui::RichText::new(parameters).small()).wrap())
-                        .on_hover_text(format!("完整精度：{precise_equation}"));
-                }
-                if let Some(r2) = r2 {
-                    ui.add_space(5.0);
-                    ui.small(format!("R² = {r2:.6}"));
-                }
-            }
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(6, 0))
+                .show(ui, |ui| {
+                    for (index, (display_equation, precise_equation, r2)) in
+                        fit_details.into_iter().enumerate()
+                    {
+                        if index > 0 {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                        }
+                        let (formula, parameters) =
+                            Self::split_fit_display_equation(&display_equation);
+                        ui.add(egui::Label::new(formula).wrap())
+                            .on_hover_text(format!("完整精度：{precise_equation}"));
+                        if let Some(parameters) = parameters {
+                            ui.add_space(5.0);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(parameters).small()).wrap(),
+                            )
+                            .on_hover_text(format!("完整精度：{precise_equation}"));
+                        }
+                        if let Some(r2) = r2 {
+                            ui.add_space(5.0);
+                            ui.small(format!("R² = {r2:.6}"));
+                        }
+                    }
+                });
         }
         column_names
     }
