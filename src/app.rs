@@ -482,7 +482,7 @@ impl InstPlotLiteApp {
                                             };
                                             ui.checkbox(
                                                 selected,
-                                                format!("{marker}{}", compact_label(name, 52)),
+                                                format!("{marker}{}", compact_label(name, 38)),
                                             )
                                             .on_hover_text(name);
                                         }
@@ -2387,7 +2387,7 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
 }
 
 fn legend_series_name(name: &str, is_active: bool) -> String {
-    let name = compact_label(name, 56);
+    let name = compact_label(name, 38);
     if is_active {
         format!("▶ {name}")
     } else {
