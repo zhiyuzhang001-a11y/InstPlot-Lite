@@ -1641,7 +1641,7 @@ impl InstPlotLiteApp {
 
         let mut labels = Vec::with_capacity(3);
         if let Some(dataset) = self.datasets.get(self.active_dataset) {
-            labels.push(dataset.display_name());
+            labels.push(format!("当前：{}", dataset.display_name()));
             if let Some(column) = dataset.columns.get(self.x_column) {
                 labels.push(column.name.clone());
             }
@@ -1687,8 +1687,8 @@ impl InstPlotLiteApp {
                 .selected_text(
                     dataset_names
                         .get(app.active_dataset)
-                        .map(String::as_str)
-                        .unwrap_or("未选择"),
+                        .map(|name| format!("当前：{name}"))
+                        .unwrap_or_else(|| "未选择".to_owned()),
                 )
                 .show_ui(ui, |ui| {
                     for (index, name) in dataset_names.iter().enumerate() {
@@ -2075,9 +2075,20 @@ impl eframe::App for InstPlotLiteApp {
                         dataset.plot_points(x_column, y_column, point_limit, self.visible_x_range);
                     if !points.is_empty() {
                         let color = series_color(dataset_index);
-                        plot_ui
-                            .line(Line::new(dataset.display_name(), points.clone()).color(color));
-                        plot_ui.points(Points::new("", points).color(color).radius(3.5));
+                        let is_active = dataset_index == self.active_dataset;
+                        plot_ui.line(
+                            Line::new(
+                                legend_series_name(&dataset.display_name(), is_active),
+                                points.clone(),
+                            )
+                            .color(color)
+                            .width(if is_active { 3.0 } else { 1.2 }),
+                        );
+                        plot_ui.points(Points::new("", points).color(color).radius(if is_active {
+                            4.5
+                        } else {
+                            2.5
+                        }));
                     }
                     if let Some(pending) = self
                         .pending_deletion
@@ -2110,10 +2121,11 @@ impl eframe::App for InstPlotLiteApp {
                     }
                 }
                 for (fit_index, fit) in self.fit_overlays.iter().enumerate() {
+                    let is_active = fit.target.dataset_index == Some(self.active_dataset);
                     plot_ui.line(
-                        Line::new(fit.name.clone(), fit.points.clone())
+                        Line::new(legend_series_name(&fit.name, is_active), fit.points.clone())
                             .color(fit_color(fit_index))
-                            .width(2.5),
+                            .width(if is_active { 3.5 } else { 1.8 }),
                     );
                 }
             })
@@ -2233,6 +2245,14 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
         maximum = maximum.max(value);
     }
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
+}
+
+fn legend_series_name(name: &str, is_active: bool) -> String {
+    if is_active {
+        format!("▶ {name}")
+    } else {
+        name.to_owned()
+    }
 }
 
 fn preferred_import_columns(
@@ -2541,8 +2561,8 @@ fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        FitOverlay, FitTarget, configure_interface_style, demo_curve, preferred_import_columns,
-        store_fit_overlay, wheel_zoom_factor,
+        FitOverlay, FitTarget, configure_interface_style, demo_curve, legend_series_name,
+        preferred_import_columns, store_fit_overlay, wheel_zoom_factor,
     };
     use eframe::egui;
 
@@ -2594,6 +2614,12 @@ mod tests {
             preferred_import_columns(&columns, Some(&("field".to_owned(), "field".to_owned())),),
             (1, 1)
         );
+    }
+
+    #[test]
+    fn active_curve_is_explicitly_marked_in_the_legend() {
+        assert_eq!(legend_series_name("sample.csv", true), "▶ sample.csv");
+        assert_eq!(legend_series_name("other.csv", false), "other.csv");
     }
 
     #[test]
