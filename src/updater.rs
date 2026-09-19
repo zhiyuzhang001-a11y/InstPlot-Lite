@@ -348,12 +348,19 @@ fn read_small_response(agent: &ureq::Agent, url: &str, limit: usize) -> Result<V
         .get(url)
         .call()
         .map_err(|error| format!("无法访问更新服务器：{error}"))?;
-    response
+    // ureq's reader limit is exclusive: a body whose length is exactly the
+    // configured value is reported as too large. Read one extra byte, then
+    // enforce our inclusive maximum explicitly.
+    let bytes = response
         .body_mut()
         .with_config()
-        .limit(limit as u64)
+        .limit(limit.saturating_add(1) as u64)
         .read_to_vec()
-        .map_err(|error| format!("无法读取更新信息：{error}"))
+        .map_err(|error| format!("无法读取更新信息：{error}"))?;
+    if bytes.len() > limit {
+        return Err(format!("更新信息超过允许的 {limit} 字节"));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
