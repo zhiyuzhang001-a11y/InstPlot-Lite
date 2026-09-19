@@ -312,13 +312,17 @@ fn check_for_update() -> Result<Option<ReleaseManifest>, String> {
 }
 
 fn check_for_update_from(source: &UpdateSource<'_>) -> Result<Option<ReleaseManifest>, String> {
-    let agent = http_agent(Duration::from_secs(20), source.use_system_proxy);
-    let manifest_bytes = read_small_response(&agent, source.manifest_url, MAX_MANIFEST_BYTES)
-        .map_err(|error| format!("读取更新清单失败：{error}"))?;
+    let manifest_agent = http_agent(Duration::from_secs(20), source.use_system_proxy);
+    let manifest_bytes =
+        read_small_response(&manifest_agent, source.manifest_url, MAX_MANIFEST_BYTES)
+            .map_err(|error| format!("读取更新清单失败：{error}"))?;
     let release: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("更新清单格式错误：{error}"))?;
     validate_signature_location(&release, source.signature_url_prefix)?;
-    let signature_bytes = read_small_response(&agent, &release.signature_url, 64)
+    // Use a fresh connection pool because simple HTTP/1.0 origins can close the
+    // manifest connection without advertising that it cannot be reused.
+    let signature_agent = http_agent(Duration::from_secs(20), source.use_system_proxy);
+    let signature_bytes = read_small_response(&signature_agent, &release.signature_url, 64)
         .map_err(|error| format!("读取更新签名失败：{error}"))?;
     verify_signature(&source.public_key, &manifest_bytes, &signature_bytes)?;
     validate_manifest(&release, source.release_url_prefix)?;
