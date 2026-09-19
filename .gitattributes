@@ -1,0 +1,2 @@
+# This fixture is signed byte-for-byte. Windows checkout must not rewrite LF.
+tests/fixtures/update-manifest-signed.json -text
