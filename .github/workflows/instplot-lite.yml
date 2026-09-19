@@ -18,6 +18,7 @@ on:
       - "logo.ico"
       - "LICENSE"
       - "THIRD_PARTY_NOTICES.md"
+      - ".gitattributes"
       - ".github/workflows/instplot-lite.yml"
   pull_request:
     paths:
@@ -32,6 +33,7 @@ on:
       - "logo.ico"
       - "LICENSE"
       - "THIRD_PARTY_NOTICES.md"
+      - ".gitattributes"
       - ".github/workflows/instplot-lite.yml"
   workflow_dispatch:
 
