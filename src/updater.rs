@@ -33,6 +33,7 @@ struct UpdateSource<'a> {
     signature_url_prefix: &'a str,
     public_key: [u8; 32],
     current_version: &'a str,
+    use_system_proxy: bool,
 }
 
 fn production_source() -> UpdateSource<'static> {
@@ -42,6 +43,7 @@ fn production_source() -> UpdateSource<'static> {
         signature_url_prefix: SIGNATURE_URL_PREFIX,
         public_key: UPDATE_PUBLIC_KEY,
         current_version: env!("CARGO_PKG_VERSION"),
+        use_system_proxy: true,
     }
 }
 
@@ -310,12 +312,14 @@ fn check_for_update() -> Result<Option<ReleaseManifest>, String> {
 }
 
 fn check_for_update_from(source: &UpdateSource<'_>) -> Result<Option<ReleaseManifest>, String> {
-    let agent = http_agent(Duration::from_secs(20));
-    let manifest_bytes = read_small_response(&agent, source.manifest_url, MAX_MANIFEST_BYTES)?;
+    let agent = http_agent(Duration::from_secs(20), source.use_system_proxy);
+    let manifest_bytes = read_small_response(&agent, source.manifest_url, MAX_MANIFEST_BYTES)
+        .map_err(|error| format!("读取更新清单失败：{error}"))?;
     let release: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("更新清单格式错误：{error}"))?;
     validate_signature_location(&release, source.signature_url_prefix)?;
-    let signature_bytes = read_small_response(&agent, &release.signature_url, 64)?;
+    let signature_bytes = read_small_response(&agent, &release.signature_url, 64)
+        .map_err(|error| format!("读取更新签名失败：{error}"))?;
     verify_signature(&source.public_key, &manifest_bytes, &signature_bytes)?;
     validate_manifest(&release, source.release_url_prefix)?;
     let available =
@@ -325,12 +329,14 @@ fn check_for_update_from(source: &UpdateSource<'_>) -> Result<Option<ReleaseMani
     Ok((available > current).then_some(release))
 }
 
-fn http_agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
+fn http_agent(timeout: Duration, use_system_proxy: bool) -> ureq::Agent {
+    let mut builder = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
-        .user_agent(concat!("InstPlot-Lite/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
+        .user_agent(concat!("InstPlot-Lite/", env!("CARGO_PKG_VERSION")));
+    if !use_system_proxy {
+        builder = builder.proxy(None);
+    }
+    builder.build().into()
 }
 
 fn read_small_response(agent: &ureq::Agent, url: &str, limit: usize) -> Result<Vec<u8>, String> {
@@ -399,7 +405,15 @@ fn download_installer(
     release: &ReleaseManifest,
     sender: &Sender<UpdateEvent>,
 ) -> Result<PathBuf, String> {
-    let agent = http_agent(Duration::from_secs(15 * 60));
+    download_installer_with_proxy(release, sender, true)
+}
+
+fn download_installer_with_proxy(
+    release: &ReleaseManifest,
+    sender: &Sender<UpdateEvent>,
+    use_system_proxy: bool,
+) -> Result<PathBuf, String> {
+    let agent = http_agent(Duration::from_secs(15 * 60), use_system_proxy);
     let mut response = agent
         .get(&release.installer_url)
         .call()
@@ -530,11 +544,12 @@ pub fn run_e2e(status_path: &Path) -> Result<(), String> {
         signature_url_prefix: &signature_url_prefix,
         public_key,
         current_version: &current_version,
+        use_system_proxy: false,
     };
     let release =
         check_for_update_from(&source)?.ok_or_else(|| "更新测试未检测到更高版本".to_owned())?;
     let (sender, _events) = mpsc::channel();
-    let installer = download_installer(&release, &sender)?;
+    let installer = download_installer_with_proxy(&release, &sender, false)?;
     std::fs::write(
         status_path,
         format!("download-verified\nversion={}\n", release.version),
