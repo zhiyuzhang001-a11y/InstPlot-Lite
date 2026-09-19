@@ -1,6 +1,6 @@
 # InstPlot Lite status
 
-Updated: 2026-09-17
+Updated: 2026-09-19
 
 > [!NOTE]
 > InstPlot Lite is now the current user-facing product. The v0.3.2 unsigned
@@ -30,6 +30,10 @@ a terminal.
   Latin, Greek, mathematical symbols, and punctuation.
 - Release-size optimization enabled (LTO, one codegen unit, stripped symbols).
 - Three-platform GitHub Actions build workflow added.
+- Windows release builds now perform a background OSS update check and support
+  one-click verified installer replacement. The versioned manifest signature
+  uses an embedded Ed25519 public key; installer size and SHA-256 are checked
+  before execution. macOS and Linux do not contact the OSS update service.
 - TXT/CSV/DAT/TSV import implemented with UTF-8/UTF-16/GBK decoding, separator
   and header detection, strict row-width validation, and numeric-column storage.
 - Native XLSX/XLS import maps each valid numeric worksheet to an independent
@@ -90,7 +94,7 @@ a terminal.
   Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
   CI verifies the installed Windows and Linux license files; the macOS DMG keeps
   them both in a visible folder and inside the installed app bundle.
-- One hundred two local tests pass with no compiler warnings, including real XLS and
+- One hundred twelve local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
 
@@ -171,8 +175,9 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.3.2 preview release is complete. Stable-release promotion still
-requires release-owner credentials or hands-on devices:
+The unsigned v0.3.2 preview is the transition release for future Windows
+one-click updates. Stable-release promotion still requires release-owner
+credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
 2. Configure Windows Authenticode signing.

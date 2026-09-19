@@ -361,6 +361,8 @@ pub struct InstPlotLiteApp {
     fit_overlays: Vec<FitOverlay>,
     selected_coordinate: Option<[f64; 2]>,
     status: String,
+    #[cfg(any(target_os = "windows", test))]
+    windows_updater: crate::updater::WindowsUpdater,
 }
 
 impl InstPlotLiteApp {
@@ -396,6 +398,8 @@ impl InstPlotLiteApp {
             fit_overlays: Vec::new(),
             selected_coordinate: None,
             status: "打开或拖入数据：TXT、CSV、DAT、TSV、XLSX、XLS".to_owned(),
+            #[cfg(any(target_os = "windows", test))]
+            windows_updater: crate::updater::WindowsUpdater::new(creation_context.egui_ctx.clone()),
         };
         if !startup_files.is_empty() {
             app.load_paths(startup_files);
@@ -553,16 +557,20 @@ impl InstPlotLiteApp {
 
         let mut open = true;
         let mut export = false;
-        context.show_viewport_immediate(
+        show_tool_viewport(
+            context,
             export_viewport_id(),
             egui::ViewportBuilder::default()
                 .with_title(format!("InstPlot Lite · 导出 {format_label}"))
                 .with_inner_size([470.0, 620.0])
                 .with_min_inner_size([380.0, 360.0])
                 .with_resizable(true),
-            |ui, _class| {
+            |ui, viewport_class| {
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
+                    return;
+                }
+                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
                     return;
                 }
                 egui::ScrollArea::vertical()
@@ -1215,16 +1223,20 @@ impl InstPlotLiteApp {
         let mut open = true;
         let mut requested: Option<(ProcessingOperation, String)> = None;
         let viewport_id = processing_viewport_id();
-        context.show_viewport_immediate(
+        show_tool_viewport(
+            context,
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 数据处理")
                 .with_inner_size([570.0, 570.0])
                 .with_min_inner_size([520.0, 500.0])
                 .with_resizable(true),
-            |ui, _class| {
+            |ui, viewport_class| {
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
+                    return;
+                }
+                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
                     return;
                 }
                 egui::ScrollArea::vertical()
@@ -1809,16 +1821,20 @@ impl InstPlotLiteApp {
         let mut execute = false;
         let mut clear = false;
         let viewport_id = fitting_viewport_id();
-        context.show_viewport_immediate(
+        show_tool_viewport(
+            context,
             viewport_id,
             egui::ViewportBuilder::default()
                 .with_title("InstPlot Lite · 曲线拟合")
                 .with_inner_size([620.0, 520.0])
                 .with_min_inner_size([560.0, 470.0])
                 .with_resizable(true),
-            |ui, _class| {
+            |ui, viewport_class| {
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
                     open = false;
+                    return;
+                }
+                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
                     return;
                 }
                 egui::ScrollArea::vertical()
@@ -2369,6 +2385,8 @@ impl InstPlotLiteApp {
 impl eframe::App for InstPlotLiteApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.handle_screenshot_result(ui.ctx());
+        #[cfg(any(target_os = "windows", test))]
+        self.windows_updater.poll(ui.ctx());
         let undo_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
         let redo_shortcut = egui::KeyboardShortcut::new(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -2402,6 +2420,8 @@ impl eframe::App for InstPlotLiteApp {
         ui.horizontal_wrapped(|ui| {
             ui.heading("InstPlot Lite");
             ui.separator();
+            #[cfg(any(target_os = "windows", test))]
+            self.windows_updater.show_toolbar(ui);
             if ui
                 .button(egui::RichText::new("打开文件").strong())
                 .clicked()
@@ -2468,6 +2488,8 @@ impl eframe::App for InstPlotLiteApp {
                 self.redo();
             }
         });
+        #[cfg(any(target_os = "windows", test))]
+        self.windows_updater.show_dialog(ui.ctx());
         ui.separator();
         let wide_layout = ui.available_width() >= 820.0;
         let column_names = if wide_layout {
@@ -2551,6 +2573,10 @@ impl eframe::App for InstPlotLiteApp {
         let hidden_series_before = PlotMemory::load(ui.ctx(), plot_id)
             .map(|memory| memory.hidden_items)
             .unwrap_or_default();
+        if self.reset_view {
+            reset_plot_bounds_preserving_visibility(ui.ctx(), plot_id);
+            self.reset_view = false;
+        }
         let mut plot = Plot::new("main-plot")
             .id(plot_id)
             .legend(Legend::default())
@@ -2576,10 +2602,6 @@ impl eframe::App for InstPlotLiteApp {
                 .size(17.0)
                 .strong(),
         );
-        if self.reset_view {
-            plot = plot.reset();
-            self.reset_view = false;
-        }
         let mut plotted_series_ids = Vec::new();
         let plot_row = ui.horizontal(|ui| {
             // egui_plot paints the vertical axis title just outside its own
@@ -2631,12 +2653,7 @@ impl eframe::App for InstPlotLiteApp {
                         let color = series_color(dataset_index);
                         let is_active = dataset_index == self.active_dataset;
                         let series_name = legend_series_name(&dataset.display_name(), is_active);
-                        let series_id = egui::Id::new((
-                            "data-curve-series",
-                            dataset.plot_id.as_str(),
-                            x_column,
-                            y_column,
-                        ));
+                        let series_id = data_curve_series_id(dataset_index, &dataset.plot_id);
                         plotted_series_ids.push(series_id);
                         plot_ui.line(
                             Line::new(series_name.clone(), points.clone())
@@ -3028,6 +3045,19 @@ fn legend_series_name(name: &str, is_active: bool) -> String {
     }
 }
 
+fn data_curve_series_id(dataset_index: usize, plot_id: &str) -> egui::Id {
+    egui::Id::new(("data-curve-series", dataset_index, plot_id))
+}
+
+fn reset_plot_bounds_preserving_visibility(context: &egui::Context, plot_id: egui::Id) -> bool {
+    let Some(mut memory) = PlotMemory::load(context, plot_id) else {
+        return false;
+    };
+    memory.auto_bounds = true.into();
+    memory.store(context, plot_id);
+    true
+}
+
 fn compact_label(value: &str, maximum_chars: usize) -> String {
     let characters = value.chars().collect::<Vec<_>>();
     if characters.len() <= maximum_chars || maximum_chars < 5 {
@@ -3332,9 +3362,68 @@ fn export_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("instplot-lite-export")
 }
 
+fn show_tool_viewport<T>(
+    context: &egui::Context,
+    viewport_id: egui::ViewportId,
+    builder: egui::ViewportBuilder,
+    viewport_ui: impl FnMut(&mut egui::Ui, egui::ViewportClass) -> T,
+) -> T {
+    let previously_embedded = context.embed_viewports();
+    if tool_windows_should_be_embedded(context.input(|input| input.viewport().fullscreen)) {
+        context.set_embed_viewports(true);
+    }
+    let result = context.show_viewport_immediate(viewport_id, builder, viewport_ui);
+    context.set_embed_viewports(previously_embedded);
+    result
+}
+
+fn tool_windows_should_be_embedded(fullscreen: Option<bool>) -> bool {
+    fullscreen == Some(true)
+}
+
+fn show_embedded_window_close_control(
+    ui: &mut egui::Ui,
+    viewport_class: egui::ViewportClass,
+    open: &mut bool,
+) -> bool {
+    if viewport_class != egui::ViewportClass::EmbeddedWindow {
+        return false;
+    }
+
+    let escape_pressed = ui.ctx().top_layer_id() == Some(ui.layer_id())
+        && ui
+            .ctx()
+            .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let mut close_clicked = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close_clicked = ui
+                .button("关闭")
+                .on_hover_text("关闭此窗口（Esc）")
+                .clicked();
+        });
+    });
+    ui.separator();
+    if escape_pressed || close_clicked {
+        *open = false;
+        true
+    } else {
+        false
+    }
+}
+
 fn focus_viewport(context: &egui::Context, viewport_id: egui::ViewportId) {
-    context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Minimized(false));
-    context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
+    if context.embed_viewports()
+        || tool_windows_should_be_embedded(context.input(|input| input.viewport().fullscreen))
+    {
+        context.move_to_top(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new(viewport_id),
+        ));
+    } else {
+        context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Minimized(false));
+        context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
+    }
 }
 
 fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> bool {
@@ -3412,13 +3501,16 @@ fn fit_overlay_matches_coordinates(
 mod tests {
     use super::{
         AxisDisplay, FitOverlay, FitScope, FitTarget, InstPlotLiteApp, compact_label,
-        configure_interface_style, dataset_plot_columns, demo_curve, fit_dataset_indices,
-        fit_overlay_matches_coordinates, format_axis_decimal, is_inside_range, legend_series_name,
-        plot_coordinate_names, preferred_import_columns, sole_selected_index, store_fit_overlay,
-        store_fit_overlays, synchronize_selection, wheel_zoom_factor,
+        configure_interface_style, data_curve_series_id, dataset_plot_columns, demo_curve,
+        fit_dataset_indices, fit_overlay_matches_coordinates, format_axis_decimal, is_inside_range,
+        legend_series_name, plot_coordinate_names, preferred_import_columns,
+        reset_plot_bounds_preserving_visibility, sole_selected_index, store_fit_overlay,
+        store_fit_overlays, synchronize_selection, tool_windows_should_be_embedded,
+        wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
+    use egui_plot::{Line, Plot, PlotMemory};
     use std::path::PathBuf;
 
     #[test]
@@ -3434,10 +3526,53 @@ mod tests {
     }
 
     #[test]
+    fn tool_windows_embed_only_in_confirmed_fullscreen_mode() {
+        assert!(tool_windows_should_be_embedded(Some(true)));
+        assert!(!tool_windows_should_be_embedded(Some(false)));
+        assert!(!tool_windows_should_be_embedded(None));
+    }
+
+    #[test]
     fn mouse_wheel_zoom_uses_conventional_direction() {
         assert!(wheel_zoom_factor(120.0) > 1.0);
         assert!(wheel_zoom_factor(-120.0) < 1.0);
         assert_eq!(wheel_zoom_factor(0.0), 1.0);
+    }
+
+    #[test]
+    fn data_curve_identity_does_not_depend_on_selected_columns() {
+        let first = data_curve_series_id(2, "dataset-id");
+        let after_column_change = data_curve_series_id(2, "dataset-id");
+        let different_dataset = data_curve_series_id(3, "other-id");
+
+        assert_eq!(first, after_column_change);
+        assert_ne!(first, different_dataset);
+    }
+
+    #[test]
+    fn resetting_plot_bounds_preserves_hidden_series() {
+        let context = egui::Context::default();
+        let plot_id = egui::Id::new("visibility-preserving-reset-test");
+        let series_id = data_curve_series_id(0, "hidden-dataset");
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            Plot::new("visibility-preserving-reset-test")
+                .id(plot_id)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(Line::new("curve", vec![[0.0, 0.0], [1.0, 1.0]]).id(series_id));
+                });
+        });
+        output.drop_without_applying_deltas();
+        let mut memory = PlotMemory::load(&context, plot_id).expect("plot memory should exist");
+        memory.hidden_items.insert(series_id);
+        memory.auto_bounds = false.into();
+        memory.store(&context, plot_id);
+
+        assert!(reset_plot_bounds_preserving_visibility(&context, plot_id));
+
+        let memory = PlotMemory::load(&context, plot_id).expect("plot memory should remain");
+        assert!(memory.hidden_items.contains(&series_id));
+        assert!(memory.auto_bounds.x);
+        assert!(memory.auto_bounds.y);
     }
 
     #[test]

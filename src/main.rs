@@ -8,6 +8,8 @@ mod fitting;
 mod fonts;
 mod image_export;
 mod processing;
+#[cfg(any(target_os = "windows", test))]
+mod updater;
 
 use app::InstPlotLiteApp;
 use std::path::PathBuf;

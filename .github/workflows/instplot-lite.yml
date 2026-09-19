@@ -2,6 +2,10 @@ name: InstPlot Lite
 
 on:
   push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -160,6 +164,18 @@ jobs:
           }
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Installed executable smoke check failed" }
+
+          # Exercise the same silent replacement flags used by the in-app updater.
+          $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
+          Start-Sleep -Seconds 2
+          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS", "/SP-", "/DIR=$installDir"
+          if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
+          Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
+          $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
+          if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
+
           $uninstaller = Join-Path $installDir "unins000.exe"
           $process = Start-Process $uninstaller -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
           if ($process.ExitCode -ne 0) { throw "Uninstaller exited with $($process.ExitCode)" }
@@ -218,3 +234,37 @@ jobs:
             target/package/*.deb
             target/package/*.tar.gz
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub prerelease
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [quality, package-macos, package-windows, package-linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify tag matches Cargo package version
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "${GITHUB_REF_NAME}" = "v${version}"
+
+      - name: Download verified packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: InstPlot-Lite-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release-assets
+          sha256sum -- ./* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "${GITHUB_REF_NAME}" ./* \
+            --title "InstPlot Lite ${GITHUB_REF_NAME}" \
+            --notes-file ../docs/RELEASE_NOTES_v0.3.2.md \
+            --prerelease

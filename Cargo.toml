@@ -18,6 +18,22 @@ png = "0.18.0"
 rfd = "0.17.2"
 rust_xlsxwriter = "0.99.0"
 
+[target.'cfg(windows)'.dependencies]
+ed25519-dalek = "3.0.0"
+semver = "1.0.28"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip", "win-system-proxy"] }
+
+[dev-dependencies]
+ed25519-dalek = "3.0.0"
+semver = "1.0.28"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

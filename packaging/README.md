@@ -36,6 +36,35 @@ The installer registers InstPlot Lite in Windows **Settings > Apps**. Its Inno
 Setup uninstaller removes the executable and the Start Menu and optional desktop
 shortcuts. The app does not leave user data behind.
 
+### Windows updates through OSS
+
+Release builds check the signed update manifest at
+`https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite/stable/latest.json`.
+Only Windows uses this update channel. macOS and Linux never contact OSS.
+
+The manifest has a versioned detached Ed25519 signature under
+`stable/signatures/`, and the
+installer is checked against the signed size and SHA-256 before execution. This
+does not replace Authenticode and therefore does not suppress Windows
+SmartScreen, but it prevents an unsigned or modified OSS object from being run
+by the updater.
+
+After downloading the Windows installer artifact, prepare the exact upload tree
+with:
+
+```sh
+python3 packaging/windows/prepare-oss-release.py \
+  target/package/InstPlot-Lite-0.3.2-windows-x64-setup.exe \
+  --private-key /secure/path/update-signing-key.pem \
+  --notes "Release notes"
+```
+
+Upload the versioned installer first, the versioned `.sig` second, and
+`latest.json` last. Updating that single final object atomically activates the
+release. The private key must never be committed or uploaded to OSS.
+Its corresponding public-key SHA-256 fingerprint is
+`158dbcc357d5c1d11434d38bc8c522ed598b0273a16f85d5af0cd71acd4c9333`.
+
 ## Linux
 
 Run `packaging/linux/build-packages.sh` on Ubuntu 22.04 or a compatible build
