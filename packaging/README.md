@@ -65,6 +65,15 @@ release. The private key must never be committed or uploaded to OSS.
 Its corresponding public-key SHA-256 fingerprint is
 `158dbcc357d5c1d11434d38bc8c522ed598b0273a16f85d5af0cd71acd4c9333`.
 
+The Windows packaging job also runs an isolated end-to-end updater test. It
+installs a test-enabled old client, serves a newly generated signed manifest
+and the normal candidate installer from a loopback HTTP server, and then makes
+the installed client perform the real check, download, Ed25519 verification,
+SHA-256 verification, installer launch, and in-place replacement flow. The job
+passes only when the installed executable is byte-for-byte identical to the
+candidate build and its importer smoke check succeeds. The `updater-e2e` Cargo
+feature and endpoint overrides are never enabled in public packages.
+
 ## Linux
 
 Run `packaging/linux/build-packages.sh` on Ubuntu 22.04 or a compatible build

@@ -5,6 +5,12 @@ edition = "2024"
 description = "A lightweight native data plotting and point-editing tool"
 license = "MIT"
 
+[features]
+default = []
+# Enables the isolated Windows updater harness used by GitHub Actions. Release
+# packages are built without this feature and cannot override trusted endpoints.
+updater-e2e = []
+
 [dependencies]
 calamine = "0.36.1"
 chardetng = "1.0.0"

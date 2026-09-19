@@ -27,6 +27,24 @@ const UPDATE_PUBLIC_KEY: [u8; 32] = [
     0x71, 0xa7, 0xaf, 0x30, 0x11, 0x41, 0xd7, 0xf9, 0x23, 0xe4, 0xa8, 0x6a, 0x5f, 0x8e, 0xe8, 0x22,
 ];
 
+struct UpdateSource<'a> {
+    manifest_url: &'a str,
+    release_url_prefix: &'a str,
+    signature_url_prefix: &'a str,
+    public_key: [u8; 32],
+    current_version: &'a str,
+}
+
+fn production_source() -> UpdateSource<'static> {
+    UpdateSource {
+        manifest_url: MANIFEST_URL,
+        release_url_prefix: RELEASE_URL_PREFIX,
+        signature_url_prefix: SIGNATURE_URL_PREFIX,
+        public_key: UPDATE_PUBLIC_KEY,
+        current_version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseManifest {
@@ -288,17 +306,21 @@ impl WindowsUpdater {
 }
 
 fn check_for_update() -> Result<Option<ReleaseManifest>, String> {
+    check_for_update_from(&production_source())
+}
+
+fn check_for_update_from(source: &UpdateSource<'_>) -> Result<Option<ReleaseManifest>, String> {
     let agent = http_agent(Duration::from_secs(20));
-    let manifest_bytes = read_small_response(&agent, MANIFEST_URL, MAX_MANIFEST_BYTES)?;
+    let manifest_bytes = read_small_response(&agent, source.manifest_url, MAX_MANIFEST_BYTES)?;
     let release: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("更新清单格式错误：{error}"))?;
-    validate_signature_location(&release)?;
+    validate_signature_location(&release, source.signature_url_prefix)?;
     let signature_bytes = read_small_response(&agent, &release.signature_url, 64)?;
-    verify_manifest_signature(&manifest_bytes, &signature_bytes)?;
-    validate_manifest(&release)?;
+    verify_signature(&source.public_key, &manifest_bytes, &signature_bytes)?;
+    validate_manifest(&release, source.release_url_prefix)?;
     let available =
         Version::parse(&release.version).map_err(|error| format!("服务器版本号无效：{error}"))?;
-    let current = Version::parse(env!("CARGO_PKG_VERSION"))
+    let current = Version::parse(source.current_version)
         .map_err(|error| format!("当前版本号无效：{error}"))?;
     Ok((available > current).then_some(release))
 }
@@ -324,6 +346,7 @@ fn read_small_response(agent: &ureq::Agent, url: &str, limit: usize) -> Result<V
         .map_err(|error| format!("无法读取更新信息：{error}"))
 }
 
+#[cfg(test)]
 fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
     verify_signature(&UPDATE_PUBLIC_KEY, manifest, signature)
 }
@@ -339,13 +362,13 @@ fn verify_signature(public_key: &[u8; 32], message: &[u8], signature: &[u8]) -> 
         .map_err(|_| "更新清单签名验证失败，已拒绝本次更新".to_owned())
 }
 
-fn validate_manifest(release: &ReleaseManifest) -> Result<(), String> {
+fn validate_manifest(release: &ReleaseManifest, release_url_prefix: &str) -> Result<(), String> {
     if release.schema != 1 {
         return Err(format!("不支持的更新清单版本：{}", release.schema));
     }
     Version::parse(&release.version).map_err(|error| format!("服务器版本号无效：{error}"))?;
     let expected_installer = format!(
-        "{RELEASE_URL_PREFIX}{}/InstPlot-Lite-{}-windows-x64-setup.exe",
+        "{release_url_prefix}{}/InstPlot-Lite-{}-windows-x64-setup.exe",
         release.version, release.version
     );
     if release.installer_url != expected_installer {
@@ -360,9 +383,12 @@ fn validate_manifest(release: &ReleaseManifest) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_signature_location(release: &ReleaseManifest) -> Result<(), String> {
+fn validate_signature_location(
+    release: &ReleaseManifest,
+    signature_url_prefix: &str,
+) -> Result<(), String> {
     Version::parse(&release.version).map_err(|error| format!("服务器版本号无效：{error}"))?;
-    let expected = format!("{SIGNATURE_URL_PREFIX}{}.sig", release.version);
+    let expected = format!("{signature_url_prefix}{}.sig", release.version);
     if release.signature_url != expected {
         return Err("更新签名地址不属于当前版本的受信任 OSS 目录".to_owned());
     }
@@ -475,6 +501,49 @@ fn launch_installer(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("无法启动更新安装程序：{error}"))
 }
 
+#[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+pub fn run_e2e(status_path: &Path) -> Result<(), String> {
+    fn required_env(name: &str) -> Result<String, String> {
+        std::env::var(name).map_err(|_| format!("缺少更新测试环境变量：{name}"))
+    }
+
+    fn decode_public_key(text: &str) -> Result<[u8; 32], String> {
+        if text.len() != 64 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("更新测试公钥格式无效".to_owned());
+        }
+        let mut output = [0_u8; 32];
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
+                .map_err(|_| "更新测试公钥格式无效".to_owned())?;
+        }
+        Ok(output)
+    }
+
+    let manifest_url = required_env("INSTPLOT_UPDATER_E2E_MANIFEST_URL")?;
+    let release_url_prefix = required_env("INSTPLOT_UPDATER_E2E_RELEASE_PREFIX")?;
+    let signature_url_prefix = required_env("INSTPLOT_UPDATER_E2E_SIGNATURE_PREFIX")?;
+    let public_key = decode_public_key(&required_env("INSTPLOT_UPDATER_E2E_PUBLIC_KEY")?)?;
+    let current_version = required_env("INSTPLOT_UPDATER_E2E_CURRENT_VERSION")?;
+    let source = UpdateSource {
+        manifest_url: &manifest_url,
+        release_url_prefix: &release_url_prefix,
+        signature_url_prefix: &signature_url_prefix,
+        public_key,
+        current_version: &current_version,
+    };
+    let release =
+        check_for_update_from(&source)?.ok_or_else(|| "更新测试未检测到更高版本".to_owned())?;
+    let (sender, _events) = mpsc::channel();
+    let installer = download_installer(&release, &sender)?;
+    std::fs::write(
+        status_path,
+        format!("download-verified\nversion={}\n", release.version),
+    )
+    .map_err(|error| format!("无法写入更新测试状态：{error}"))?;
+    launch_installer(&installer)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,20 +574,20 @@ mod tests {
 
     #[test]
     fn validates_expected_release_manifest() {
-        assert!(validate_manifest(&manifest()).is_ok());
+        assert!(validate_manifest(&manifest(), RELEASE_URL_PREFIX).is_ok());
     }
 
     #[test]
     fn rejects_unsigned_redirect_targets_and_invalid_hashes() {
         let mut release = manifest();
         release.installer_url = "https://example.com/update.exe".to_owned();
-        assert!(validate_manifest(&release).is_err());
+        assert!(validate_manifest(&release, RELEASE_URL_PREFIX).is_err());
         release = manifest();
         release.sha256 = "not-a-hash".to_owned();
-        assert!(validate_manifest(&release).is_err());
+        assert!(validate_manifest(&release, RELEASE_URL_PREFIX).is_err());
         release = manifest();
         release.signature_url = "https://example.com/latest.sig".to_owned();
-        assert!(validate_signature_location(&release).is_err());
+        assert!(validate_signature_location(&release, SIGNATURE_URL_PREFIX).is_err());
     }
 
     #[test]

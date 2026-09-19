@@ -16,6 +16,14 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let arguments = startup_arguments();
+    #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+    if let Some(status_path) = &arguments.updater_e2e_status {
+        if let Err(error) = updater::run_e2e(status_path) {
+            let _ = std::fs::write(status_path, format!("error\n{error}\n"));
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if arguments.check_only {
         let mut failed = false;
         for path in &arguments.files {
@@ -75,12 +83,16 @@ struct StartupArguments {
     files: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
     check_only: bool,
+    #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+    updater_e2e_status: Option<PathBuf>,
 }
 
 fn startup_arguments() -> StartupArguments {
     let mut files = Vec::new();
     let mut screenshot = None;
     let mut check_only = false;
+    #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+    let mut updater_e2e_status = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == "--open" {
@@ -96,6 +108,11 @@ fn startup_arguments() -> StartupArguments {
             if let Some(path) = arguments.next() {
                 files.push(PathBuf::from(path));
             }
+        } else if argument == "--updater-e2e" {
+            #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+            if let Some(path) = arguments.next() {
+                updater_e2e_status = Some(PathBuf::from(path));
+            }
         } else if !argument.to_string_lossy().starts_with('-') {
             files.push(PathBuf::from(argument));
         }
@@ -104,5 +121,7 @@ fn startup_arguments() -> StartupArguments {
         files,
         screenshot,
         check_only,
+        #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+        updater_e2e_status,
     }
 }
