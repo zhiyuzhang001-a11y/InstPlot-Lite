@@ -22,6 +22,22 @@ cargo test
 cargo build --release
 ```
 
+## One-command release
+
+After committing and pushing the version bump and
+`docs/RELEASE_NOTES_vX.Y.Z.md`, dispatch the complete release pipeline with:
+
+```sh
+scripts/release.sh
+```
+
+The command validates that local `main` matches `origin/main`, derives the tag
+from `Cargo.toml`, and hands the release to GitHub Actions. It then exits; the
+computer does not need to remain awake. GitHub independently builds and tests
+all supported packages, creates the version tag and prerelease, publishes the
+signed Windows update to OSS, and verifies the public download. Ordinary pushes
+run quality checks only, so release packages are no longer built twice.
+
 ## Download
 
 The [v0.3.4 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.4)

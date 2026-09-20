@@ -13,6 +13,7 @@ on:
       - "src/**"
       - "assets/**"
       - "packaging/**"
+      - "scripts/**"
       - "tests/**"
       - "InP_logo.png"
       - "logo.ico"
@@ -29,6 +30,7 @@ on:
       - "src/**"
       - "assets/**"
       - "packaging/**"
+      - "scripts/**"
       - "tests/**"
       - "InP_logo.png"
       - "logo.ico"
@@ -38,6 +40,11 @@ on:
       - ".github/workflows/instplot-lite.yml"
       - ".github/workflows/publish-oss-update.yml"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional release tag (for example v0.3.5); leave empty to run checks only"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -48,6 +55,9 @@ env:
 jobs:
   quality:
     name: Quality (${{ matrix.os }})
+    if: >-
+      !startsWith(github.ref, 'refs/tags/v') &&
+      !(github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -88,6 +98,9 @@ jobs:
 
   package-macos:
     name: Package macOS (arm64)
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     timeout-minutes: 35
     runs-on: macos-15
     steps:
@@ -115,6 +128,9 @@ jobs:
 
   package-windows:
     name: Package Windows (x64)
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     timeout-minutes: 35
     runs-on: windows-latest
     defaults:
@@ -311,6 +327,9 @@ jobs:
 
   package-linux:
     name: Package Linux (x64)
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     timeout-minutes: 35
     runs-on: ubuntu-22.04
     steps:
@@ -359,18 +378,33 @@ jobs:
 
   release:
     name: Publish GitHub prerelease
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [quality, package-macos, package-windows, package-linux]
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    needs: [package-macos, package-windows, package-linux]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify tag matches Cargo package version
+      - name: Verify release identity and create tag when dispatched
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
         run: |
           version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
-          test "${GITHUB_REF_NAME}" = "v${version}"
+          test "${RELEASE_TAG}" = "v${version}"
+          test -f "docs/RELEASE_NOTES_${RELEASE_TAG}.md"
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${RELEASE_TAG}" "${GITHUB_SHA}" -m "InstPlot Lite ${RELEASE_TAG}"
+            git push origin "${RELEASE_TAG}"
+          else
+            git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${GITHUB_SHA}"
+          fi
 
       - name: Download verified packages
         uses: actions/download-artifact@v8
@@ -382,20 +416,23 @@ jobs:
       - name: Publish prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
         run: |
           cd release-assets
           sha256sum -- ./* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          gh release create "${GITHUB_REF_NAME}" ./* \
-            --title "InstPlot Lite ${GITHUB_REF_NAME}" \
-            --notes-file "../docs/RELEASE_NOTES_${GITHUB_REF_NAME}.md" \
+          gh release create "${RELEASE_TAG}" ./* \
+            --title "InstPlot Lite ${RELEASE_TAG}" \
+            --notes-file "../docs/RELEASE_NOTES_${RELEASE_TAG}.md" \
             --prerelease
 
   publish-windows-update:
     name: Publish Windows update to OSS
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: [release]
     uses: ./.github/workflows/publish-oss-update.yml
     with:
-      tag: ${{ github.ref_name }}
+      tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
     secrets: inherit
