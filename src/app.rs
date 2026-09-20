@@ -3369,7 +3369,7 @@ fn show_tool_viewport<T>(
     viewport_ui: impl FnMut(&mut egui::Ui, egui::ViewportClass) -> T,
 ) -> T {
     let previously_embedded = context.embed_viewports();
-    if tool_windows_should_be_embedded(context.input(|input| input.viewport().fullscreen)) {
+    if context_should_embed_tool_windows(context) {
         context.set_embed_viewports(true);
     }
     let result = context.show_viewport_immediate(viewport_id, builder, viewport_ui);
@@ -3377,8 +3377,23 @@ fn show_tool_viewport<T>(
     result
 }
 
-fn tool_windows_should_be_embedded(fullscreen: Option<bool>) -> bool {
-    fullscreen == Some(true)
+fn context_should_embed_tool_windows(context: &egui::Context) -> bool {
+    context.input(|input| {
+        let viewport = input.viewport();
+        tool_windows_should_be_embedded(
+            viewport.fullscreen,
+            viewport.maximized,
+            cfg!(target_os = "windows"),
+        )
+    })
+}
+
+fn tool_windows_should_be_embedded(
+    fullscreen: Option<bool>,
+    maximized: Option<bool>,
+    is_windows: bool,
+) -> bool {
+    fullscreen == Some(true) || (is_windows && maximized == Some(true))
 }
 
 fn show_embedded_window_close_control(
@@ -3413,9 +3428,7 @@ fn show_embedded_window_close_control(
 }
 
 fn focus_viewport(context: &egui::Context, viewport_id: egui::ViewportId) {
-    if context.embed_viewports()
-        || tool_windows_should_be_embedded(context.input(|input| input.viewport().fullscreen))
-    {
+    if context.embed_viewports() || context_should_embed_tool_windows(context) {
         context.move_to_top(egui::LayerId::new(
             egui::Order::Middle,
             egui::Id::new(viewport_id),
@@ -3502,8 +3515,9 @@ mod tests {
     use super::{
         AxisDisplay, FitOverlay, FitScope, FitTarget, InstPlotLiteApp, compact_label,
         configure_interface_style, data_curve_series_id, dataset_plot_columns, demo_curve,
-        fit_dataset_indices, fit_overlay_matches_coordinates, format_axis_decimal, is_inside_range,
-        legend_series_name, plot_coordinate_names, preferred_import_columns,
+        export_viewport_id, fit_dataset_indices, fit_overlay_matches_coordinates,
+        fitting_viewport_id, format_axis_decimal, is_inside_range, legend_series_name,
+        plot_coordinate_names, preferred_import_columns, processing_viewport_id,
         reset_plot_bounds_preserving_visibility, sole_selected_index, store_fit_overlay,
         store_fit_overlays, synchronize_selection, tool_windows_should_be_embedded,
         wheel_zoom_factor,
@@ -3526,10 +3540,45 @@ mod tests {
     }
 
     #[test]
-    fn tool_windows_embed_only_in_confirmed_fullscreen_mode() {
-        assert!(tool_windows_should_be_embedded(Some(true)));
-        assert!(!tool_windows_should_be_embedded(Some(false)));
-        assert!(!tool_windows_should_be_embedded(None));
+    fn tool_windows_embed_in_fullscreen_or_when_windows_is_maximized() {
+        assert!(tool_windows_should_be_embedded(
+            Some(true),
+            Some(false),
+            false
+        ));
+        assert!(tool_windows_should_be_embedded(
+            Some(true),
+            Some(false),
+            true
+        ));
+        assert!(tool_windows_should_be_embedded(
+            Some(false),
+            Some(true),
+            true
+        ));
+
+        assert!(!tool_windows_should_be_embedded(
+            Some(false),
+            Some(true),
+            false
+        ));
+        assert!(!tool_windows_should_be_embedded(
+            Some(false),
+            Some(false),
+            true
+        ));
+        assert!(!tool_windows_should_be_embedded(None, None, true));
+    }
+
+    #[test]
+    fn tool_windows_have_distinct_viewport_ids() {
+        let processing = processing_viewport_id();
+        let fitting = fitting_viewport_id();
+        let export = export_viewport_id();
+
+        assert_ne!(processing, fitting);
+        assert_ne!(processing, export);
+        assert_ne!(fitting, export);
     }
 
     #[test]
