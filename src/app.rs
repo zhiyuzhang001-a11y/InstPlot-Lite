@@ -2387,6 +2387,11 @@ impl eframe::App for InstPlotLiteApp {
         self.handle_screenshot_result(ui.ctx());
         #[cfg(any(target_os = "windows", test))]
         self.windows_updater.poll(ui.ctx());
+        #[cfg(any(target_os = "windows", test))]
+        if self.windows_updater.should_close_for_installation() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         let undo_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
         let redo_shortcut = egui::KeyboardShortcut::new(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,

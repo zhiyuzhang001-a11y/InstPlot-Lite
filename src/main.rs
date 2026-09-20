@@ -16,6 +16,20 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let arguments = startup_arguments();
+    #[cfg(target_os = "windows")]
+    if let Some(update_helper) = &arguments.update_helper {
+        if let Err(error) =
+            updater::run_update_helper(&update_helper.installer, &update_helper.restart_executable)
+        {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(helper) = &arguments.cleanup_helper {
+        let _ = std::fs::remove_file(helper);
+    }
     #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
     if let Some(status_path) = &arguments.updater_e2e_status {
         if let Err(error) = updater::run_e2e(status_path) {
@@ -109,18 +123,52 @@ struct StartupArguments {
     files: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
     check_only: bool,
+    #[cfg(target_os = "windows")]
+    update_helper: Option<UpdateHelperArguments>,
+    #[cfg(target_os = "windows")]
+    cleanup_helper: Option<PathBuf>,
     #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
     updater_e2e_status: Option<PathBuf>,
+}
+
+#[cfg(target_os = "windows")]
+struct UpdateHelperArguments {
+    installer: PathBuf,
+    restart_executable: PathBuf,
 }
 
 fn startup_arguments() -> StartupArguments {
     let mut files = Vec::new();
     let mut screenshot = None;
     let mut check_only = false;
+    #[cfg(target_os = "windows")]
+    let mut update_helper = None;
+    #[cfg(target_os = "windows")]
+    let mut cleanup_helper = None;
     #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
     let mut updater_e2e_status = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
+        #[cfg(target_os = "windows")]
+        {
+            if argument == updater::UPDATE_HELPER_ARGUMENT {
+                if let (Some(installer), Some(restart_executable)) =
+                    (arguments.next(), arguments.next())
+                {
+                    update_helper = Some(UpdateHelperArguments {
+                        installer: PathBuf::from(installer),
+                        restart_executable: PathBuf::from(restart_executable),
+                    });
+                }
+                continue;
+            }
+            if argument == updater::CLEANUP_HELPER_ARGUMENT {
+                if let Some(path) = arguments.next() {
+                    cleanup_helper = Some(PathBuf::from(path));
+                }
+                continue;
+            }
+        }
         if argument == "--open" {
             if let Some(path) = arguments.next() {
                 files.push(PathBuf::from(path));
@@ -147,6 +195,10 @@ fn startup_arguments() -> StartupArguments {
         files,
         screenshot,
         check_only,
+        #[cfg(target_os = "windows")]
+        update_helper,
+        #[cfg(target_os = "windows")]
+        cleanup_helper,
         #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
         updater_e2e_status,
     }

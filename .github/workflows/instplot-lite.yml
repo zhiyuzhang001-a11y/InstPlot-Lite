@@ -245,11 +245,9 @@ jobs:
           $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
           Start-Sleep -Seconds 2
           $updateLog = Join-Path $env:RUNNER_TEMP "instplot-update-style.log"
-          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/MERGETASKS=restartapp", "/SP-", "/DIR=$installDir", "/LOG=$updateLog"
+          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/SP-", "/DIR=$installDir", "/LOG=$updateLog"
           if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
           if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
-          $updateLogText = Get-Content $updateLog -Raw
-          if ($updateLogText -notmatch "(?s)-- Run entry --.*instplot-lite\.exe") { throw "Update-style reinstall did not launch the updated app" }
           Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
@@ -271,6 +269,7 @@ jobs:
           $installDir = Join-Path $testRoot "installed"
           $statusPath = Join-Path $testRoot "status.txt"
           $installLog = Join-Path $testRoot "updater-install.log"
+          $restartStatusPath = Join-Path $testRoot "restart-status.txt"
           New-Item -ItemType Directory -Force $serverRoot | Out-Null
           Copy-Item $setup.FullName $candidateSetup
           Copy-Item target/release/instplot-lite.exe $candidateExe
@@ -346,6 +345,7 @@ jobs:
             $env:INSTPLOT_UPDATER_E2E_PUBLIC_KEY = $publicHex
             $env:INSTPLOT_UPDATER_E2E_CURRENT_VERSION = "0.0.0"
             $env:INSTPLOT_UPDATER_E2E_INSTALL_LOG = $installLog
+            $env:INSTPLOT_UPDATER_E2E_RESTART_STATUS = $restartStatusPath
             $installedExe = Join-Path $installDir "instplot-lite.exe"
             $process = Start-Process $installedExe -Wait -PassThru -ArgumentList "--updater-e2e", $statusPath
             if ($process.ExitCode -ne 0) {
@@ -368,12 +368,12 @@ jobs:
             if (-not $updated) { throw "In-app updater did not install the candidate executable" }
             $restartRecorded = $false
             1..30 | ForEach-Object {
-              if (-not $restartRecorded -and (Test-Path $installLog)) {
-                $restartRecorded = (Get-Content $installLog -Raw) -match "(?s)-- Run entry --.*instplot-lite\.exe"
+              if (-not $restartRecorded -and (Test-Path $restartStatusPath)) {
+                $restartRecorded = (Get-Content $restartStatusPath -Raw) -match "restarted"
               }
               if (-not $restartRecorded) { Start-Sleep -Milliseconds 500 }
             }
-            if (-not $restartRecorded) { throw "In-app updater did not launch the updated app" }
+            if (-not $restartRecorded) { throw "In-app updater helper did not launch the updated app" }
             Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExe } | Stop-Process -Force
             $process = Start-Process $installedExe -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
             if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }

@@ -1,11 +1,11 @@
 use std::{
     fmt::Write as FmtWrite,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write as IoWrite},
     path::{Path, PathBuf},
     process::Command,
     sync::mpsc::{self, Receiver, Sender},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -22,15 +22,17 @@ const SIGNATURE_URL_PREFIX: &str =
     "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite/stable/signatures/";
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
-const INSTALLER_ARGS: [&str; 7] = [
+const INSTALLER_ARGS: [&str; 6] = [
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
     "/NORESTART",
     "/CLOSEAPPLICATIONS",
     "/NORESTARTAPPLICATIONS",
-    "/MERGETASKS=restartapp",
     "/SP-",
 ];
+pub const UPDATE_HELPER_ARGUMENT: &str = "--apply-update";
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub const CLEANUP_HELPER_ARGUMENT: &str = "--cleanup-update-helper";
 const UPDATE_PUBLIC_KEY: [u8; 32] = [
     0xe0, 0x08, 0x91, 0x87, 0x1d, 0x27, 0x2e, 0x89, 0x4b, 0xb2, 0xa6, 0xb3, 0x0c, 0x77, 0x71, 0x3d,
     0x71, 0xa7, 0xaf, 0x30, 0x11, 0x41, 0xd7, 0xf9, 0x23, 0xe4, 0xa8, 0x6a, 0x5f, 0x8e, 0xe8, 0x22,
@@ -141,7 +143,7 @@ impl WindowsUpdater {
                     }
                 }
                 UpdateEvent::DownloadFinished(result) => match result {
-                    Ok(path) => match launch_installer(&path) {
+                    Ok(path) => match launch_update_helper(&path) {
                         Ok(()) => self.state = UpdateState::Installing,
                         Err(error) => {
                             self.state = UpdateState::Error(error);
@@ -193,6 +195,10 @@ impl WindowsUpdater {
                 self.start_check(context, true);
             }
         }
+    }
+
+    pub fn should_close_for_installation(&self) -> bool {
+        matches!(self.state, UpdateState::Installing)
     }
 
     pub fn show_dialog(&mut self, context: &egui::Context) {
@@ -521,17 +527,55 @@ fn write_verified_download(
     Ok(())
 }
 
-fn launch_installer(path: &Path) -> Result<(), String> {
-    let mut command = Command::new(path);
+fn launch_update_helper(installer: &Path) -> Result<(), String> {
+    let current_executable =
+        std::env::current_exe().map_err(|error| format!("无法定位当前程序：{error}"))?;
+    let helper_directory = std::env::temp_dir().join("InstPlot Lite Updates");
+    fs::create_dir_all(&helper_directory)
+        .map_err(|error| format!("无法创建更新助手目录：{error}"))?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("无法生成更新助手名称：{error}"))?
+        .as_nanos();
+    let helper = helper_directory.join(format!(
+        "instplot-lite-update-{}-{timestamp}.exe",
+        std::process::id()
+    ));
+    fs::copy(&current_executable, &helper).map_err(|error| format!("无法创建更新助手：{error}"))?;
+
+    Command::new(&helper)
+        .arg(UPDATE_HELPER_ARGUMENT)
+        .arg(installer)
+        .arg(current_executable)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法启动更新助手：{error}"))
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn run_update_helper(installer: &Path, restart_executable: &Path) -> Result<(), String> {
+    let mut command = Command::new(installer);
     command.args(INSTALLER_ARGS);
     #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
     if let Some(log_path) = std::env::var_os("INSTPLOT_UPDATER_E2E_INSTALL_LOG") {
         command.arg(format!("/LOG={}", PathBuf::from(log_path).display()));
     }
-    command
+    let _ = command
+        .status()
+        .map_err(|error| format!("无法启动更新安装程序：{error}"))?;
+
+    Command::new(restart_executable)
+        .arg(CLEANUP_HELPER_ARGUMENT)
+        .arg(std::env::current_exe().map_err(|error| format!("无法清理更新助手：{error}"))?)
         .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法启动更新安装程序：{error}"))
+        .map_err(|error| format!("更新完成后无法重新启动 InstPlot Lite：{error}"))?;
+
+    #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+    if let Some(status_path) = std::env::var_os("INSTPLOT_UPDATER_E2E_RESTART_STATUS") {
+        fs::write(status_path, "restarted\n")
+            .map_err(|error| format!("无法写入更新重启测试状态：{error}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
@@ -574,7 +618,7 @@ pub fn run_e2e(status_path: &Path) -> Result<(), String> {
         format!("download-verified\nversion={}\n", release.version),
     )
     .map_err(|error| format!("无法写入更新测试状态：{error}"))?;
-    launch_installer(&installer)?;
+    launch_update_helper(&installer)?;
     Ok(())
 }
 
@@ -584,9 +628,13 @@ mod tests {
 
     #[test]
     fn updater_requests_exactly_one_explicit_application_restart() {
-        assert!(INSTALLER_ARGS.contains(&"/MERGETASKS=restartapp"));
         assert!(INSTALLER_ARGS.contains(&"/NORESTARTAPPLICATIONS"));
         assert!(!INSTALLER_ARGS.contains(&"/RESTARTAPPLICATIONS"));
+        assert!(
+            !INSTALLER_ARGS
+                .iter()
+                .any(|argument| argument.contains("TASKS"))
+        );
     }
 
     fn decode_hex<const N: usize>(text: &str) -> [u8; N] {
