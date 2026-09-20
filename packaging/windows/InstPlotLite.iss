@@ -47,3 +47,4 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\instplot-lite.exe"; Tasks: de
 
 [Run]
 Filename: "{app}\instplot-lite.exe"; Description: "启动 {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\instplot-lite.exe"; Flags: nowait skipifnotsilent

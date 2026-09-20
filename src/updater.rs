@@ -224,7 +224,7 @@ impl WindowsUpdater {
                             close_dialog = true;
                         }
                         if ui
-                            .button(egui::RichText::new("下载并安装").strong())
+                            .button(egui::RichText::new("更新并重启").strong())
                             .clicked()
                         {
                             begin_download = Some(release.clone());
@@ -257,7 +257,7 @@ impl WindowsUpdater {
                 }
                 UpdateState::Installing => {
                     ui.heading("正在安装更新");
-                    ui.label("安装程序将关闭 InstPlot Lite。安装完成后，请从开始菜单或桌面快捷方式重新打开。");
+                    ui.label("安装程序将关闭 InstPlot Lite，并在完成后重新打开。请不要重复启动安装程序。");
                 }
                 UpdateState::Error(error) => {
                     ui.colored_label(egui::Color32::LIGHT_RED, "更新失败");
@@ -582,7 +582,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn updater_explicitly_leaves_restart_to_the_user() {
+    fn updater_does_not_depend_on_windows_restart_manager() {
         assert!(INSTALLER_ARGS.contains(&"/NORESTARTAPPLICATIONS"));
         assert!(!INSTALLER_ARGS.contains(&"/RESTARTAPPLICATIONS"));
         assert!(

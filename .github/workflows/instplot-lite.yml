@@ -234,6 +234,7 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP "InstPlotLiteSmoke"
           $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir"
           if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
           @("LICENSE.txt", "THIRD_PARTY_NOTICES.md", "OFL-Liberation.txt", "OFL-Noto-Sans-SC.txt") | ForEach-Object {
             $licensePath = Join-Path $installDir "licenses\$_"
             if (-not (Test-Path $licensePath)) { throw "Installed license file missing: $licensePath" }
@@ -245,9 +246,24 @@ jobs:
           $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
           Start-Sleep -Seconds 2
           $updateLog = Join-Path $env:RUNNER_TEMP "instplot-update-style.log"
-          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/SP-", "/DIR=$installDir", "/LOG=$updateLog"
-          if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
-          if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
+          $query = New-Object System.Management.WqlEventQuery -ArgumentList "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'instplot-lite.exe'"
+          $restartWatcher = New-Object System.Management.ManagementEventWatcher -ArgumentList $query
+          $restartWatcher.Options.Timeout = [TimeSpan]::FromSeconds(30)
+          $restartWatcher.Start()
+          try {
+            $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/SP-", "/DIR=$installDir", "/LOG=$updateLog"
+            if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
+            if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
+            try {
+              $restartEvent = $restartWatcher.WaitForNextEvent()
+            } catch {
+              throw "Silent update did not start the updated application: $($_.Exception.Message)"
+            }
+          } finally {
+            $restartWatcher.Stop()
+            $restartWatcher.Dispose()
+          }
+          if ([uint32]$restartEvent.ProcessID -eq [uint32]$runningApp.Id) { throw "Restart event reused the old application process" }
           Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
