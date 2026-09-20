@@ -1,0 +1,164 @@
+name: Publish Windows update to OSS
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: GitHub release tag to publish to OSS
+        required: true
+        type: string
+    secrets:
+      ALIYUN_OSS_ACCESS_KEY_ID:
+        required: true
+      ALIYUN_OSS_ACCESS_KEY_SECRET:
+        required: true
+      INSTPLOT_UPDATE_SIGNING_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to publish to OSS
+        required: true
+        default: v0.3.3
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: instplot-lite-oss-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Sign, upload, and verify Windows update
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+      OSS_REGION: cn-beijing
+      OSS_ENDPOINT: https://oss-cn-beijing.aliyuncs.com
+      UPDATE_SIGNING_KEY: ${{ secrets.INSTPLOT_UPDATE_SIGNING_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Verify release identity and required secrets
+        run: |
+          test -n "${OSS_ACCESS_KEY_ID}"
+          test -n "${OSS_ACCESS_KEY_SECRET}"
+          test -n "${UPDATE_SIGNING_KEY}"
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "${RELEASE_TAG}" = "v${version}"
+          echo "INSTPLOT_VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Download verified Windows release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p target/release-assets
+          gh release download "${RELEASE_TAG}" \
+            --pattern "InstPlot-Lite-*-windows-x64-setup.exe" \
+            --dir target/release-assets
+
+      - name: Install pinned ossutil
+        run: |
+          archive="${RUNNER_TEMP}/ossutil-2.3.0-linux-amd64.zip"
+          curl --fail --silent --show-error --location \
+            https://gosspublic.alicdn.com/ossutil/v2/2.3.0/ossutil-2.3.0-linux-amd64.zip \
+            --output "${archive}"
+          echo "3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a  ${archive}" \
+            | sha256sum --check --strict
+          unzip -q "${archive}" -d "${RUNNER_TEMP}"
+          install -m 0755 \
+            "${RUNNER_TEMP}/ossutil-2.3.0-linux-amd64/ossutil" \
+            "${RUNNER_TEMP}/ossutil"
+
+      - name: Prepare signed OSS release
+        run: |
+          key_path="${RUNNER_TEMP}/update-signing-key.pem"
+          printf '%s\n' "${UPDATE_SIGNING_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
+          python3 packaging/windows/prepare-oss-release.py \
+            "target/release-assets/InstPlot-Lite-${INSTPLOT_VERSION}-windows-x64-setup.exe" \
+            --private-key "${key_path}" \
+            --published-at "$(date -u +%F)" \
+            --notes "InstPlot Lite ${RELEASE_TAG} Windows update"
+
+      - name: Upload installer, signature, then manifest
+        run: |
+          root="target/oss-upload/instplot-lite"
+          installer="InstPlot-Lite-${INSTPLOT_VERSION}-windows-x64-setup.exe"
+          "${RUNNER_TEMP}/ossutil" cp \
+            "${root}/releases/${INSTPLOT_VERSION}/${installer}" \
+            "oss://instplot-release/instplot-lite/releases/${INSTPLOT_VERSION}/${installer}" -f
+          "${RUNNER_TEMP}/ossutil" cp \
+            "${root}/stable/signatures/${INSTPLOT_VERSION}.sig" \
+            "oss://instplot-release/instplot-lite/stable/signatures/${INSTPLOT_VERSION}.sig" -f
+          "${RUNNER_TEMP}/ossutil" cp \
+            "${root}/stable/latest.json" \
+            "oss://instplot-release/instplot-lite/stable/latest.json" -f \
+            --content-type application/json
+
+      - name: Verify the public update channel
+        run: |
+          public_root="https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite"
+          verify_dir="${RUNNER_TEMP}/oss-verify"
+          mkdir -p "${verify_dir}"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            "${public_root}/stable/latest.json?verify=${GITHUB_RUN_ID}" \
+            --output "${verify_dir}/latest.json"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            "${public_root}/stable/signatures/${INSTPLOT_VERSION}.sig?verify=${GITHUB_RUN_ID}" \
+            --output "${verify_dir}/release.sig"
+          python3 - "${verify_dir}/latest.json" "${INSTPLOT_VERSION}" <<'PY'
+          import json
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected_version = sys.argv[2]
+          assert manifest["schema"] == 1
+          assert manifest["version"] == expected_version
+          assert manifest["installer_url"].startswith(
+              "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite/releases/"
+          )
+          assert manifest["signature_url"] == (
+              "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite/"
+              f"stable/signatures/{expected_version}.sig"
+          )
+          PY
+          python3 - "${verify_dir}/public.der" <<'PY'
+          import sys
+
+          key = bytes.fromhex(
+              "e00891871d272e894bb2a6b30c77713d71a7af301141d7f923e4a86a5f8ee822"
+          )
+          open(sys.argv[1], "wb").write(bytes.fromhex("302a300506032b6570032100") + key)
+          PY
+          openssl pkey -pubin -inform DER \
+            -in "${verify_dir}/public.der" -out "${verify_dir}/public.pem"
+          openssl pkeyutl -verify -pubin -rawin \
+            -inkey "${verify_dir}/public.pem" \
+            -in "${verify_dir}/latest.json" \
+            -sigfile "${verify_dir}/release.sig"
+          installer_url=$(python3 -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["installer_url"])' \
+            "${verify_dir}/latest.json")
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            "${installer_url}?verify=${GITHUB_RUN_ID}" \
+            --output "${verify_dir}/installer.exe"
+          python3 - "${verify_dir}/latest.json" "${verify_dir}/installer.exe" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          installer = sys.argv[2]
+          assert os.path.getsize(installer) == manifest["size_bytes"]
+          digest = hashlib.sha256(open(installer, "rb").read()).hexdigest()
+          assert digest == manifest["sha256"]
+          PY
