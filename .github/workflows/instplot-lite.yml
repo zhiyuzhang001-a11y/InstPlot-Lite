@@ -52,6 +52,11 @@ on:
         required: false
         default: false
         type: boolean
+      validate_windows:
+        description: "Build and test only the Windows installer without publishing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -65,7 +70,7 @@ jobs:
     if: >-
       !startsWith(github.ref, 'refs/tags/v') &&
       !(github.event_name == 'workflow_dispatch' &&
-      (inputs.release_tag != '' || inputs.validate_packages))
+      (inputs.release_tag != '' || inputs.validate_packages || inputs.validate_windows))
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -109,7 +114,7 @@ jobs:
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' &&
-      (inputs.release_tag != '' || inputs.validate_packages))
+      (inputs.release_tag != '' || inputs.validate_packages || inputs.validate_windows))
     timeout-minutes: 20
     runs-on: ubuntu-22.04
     steps:
@@ -168,7 +173,7 @@ jobs:
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' &&
-      (inputs.release_tag != '' || inputs.validate_packages))
+      (inputs.release_tag != '' || inputs.validate_packages || inputs.validate_windows))
     timeout-minutes: 35
     runs-on: windows-latest
     defaults:
@@ -239,20 +244,13 @@ jobs:
           # Exercise the same silent replacement flags used by the in-app updater.
           $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
           Start-Sleep -Seconds 2
-          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/MERGETASKS=restartapp", "/SP-", "/DIR=$installDir"
+          $updateLog = Join-Path $env:RUNNER_TEMP "instplot-update-style.log"
+          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/MERGETASKS=restartapp", "/SP-", "/DIR=$installDir", "/LOG=$updateLog"
           if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
-          Start-Sleep -Seconds 2
           if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
-          $restartedApp = $null
-          1..30 | ForEach-Object {
-            if (-not $restartedApp) {
-              $restartedApp = Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Select-Object -First 1
-            }
-            if (-not $restartedApp) { Start-Sleep -Milliseconds 500 }
-          }
-          if (-not $restartedApp) { throw "Update-style reinstall did not restart the updated app" }
-          $restartedApp | Stop-Process -Force
-          $restartedApp.WaitForExit()
+          $updateLogText = Get-Content $updateLog -Raw
+          if ($updateLogText -notmatch "(?s)-- Run entry --.*instplot-lite\.exe") { throw "Update-style reinstall did not launch the updated app" }
+          Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
 
@@ -272,6 +270,7 @@ jobs:
           $candidateExe = Join-Path $testRoot "candidate-instplot-lite.exe"
           $installDir = Join-Path $testRoot "installed"
           $statusPath = Join-Path $testRoot "status.txt"
+          $installLog = Join-Path $testRoot "updater-install.log"
           New-Item -ItemType Directory -Force $serverRoot | Out-Null
           Copy-Item $setup.FullName $candidateSetup
           Copy-Item target/release/instplot-lite.exe $candidateExe
@@ -346,6 +345,7 @@ jobs:
             $env:INSTPLOT_UPDATER_E2E_SIGNATURE_PREFIX = "$baseUrl/stable/signatures/"
             $env:INSTPLOT_UPDATER_E2E_PUBLIC_KEY = $publicHex
             $env:INSTPLOT_UPDATER_E2E_CURRENT_VERSION = "0.0.0"
+            $env:INSTPLOT_UPDATER_E2E_INSTALL_LOG = $installLog
             $installedExe = Join-Path $installDir "instplot-lite.exe"
             $process = Start-Process $installedExe -Wait -PassThru -ArgumentList "--updater-e2e", $statusPath
             if ($process.ExitCode -ne 0) {
@@ -366,16 +366,15 @@ jobs:
               if (-not $updated) { Start-Sleep -Seconds 1 }
             }
             if (-not $updated) { throw "In-app updater did not install the candidate executable" }
-            $restartedApp = $null
+            $restartRecorded = $false
             1..30 | ForEach-Object {
-              if (-not $restartedApp) {
-                $restartedApp = Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExe } | Select-Object -First 1
+              if (-not $restartRecorded -and (Test-Path $installLog)) {
+                $restartRecorded = (Get-Content $installLog -Raw) -match "(?s)-- Run entry --.*instplot-lite\.exe"
               }
-              if (-not $restartedApp) { Start-Sleep -Milliseconds 500 }
+              if (-not $restartRecorded) { Start-Sleep -Milliseconds 500 }
             }
-            if (-not $restartedApp) { throw "In-app updater did not restart the updated app" }
-            $restartedApp | Stop-Process -Force
-            $restartedApp.WaitForExit()
+            if (-not $restartRecorded) { throw "In-app updater did not launch the updated app" }
+            Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExe } | Stop-Process -Force
             $process = Start-Process $installedExe -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
             if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
           } finally {

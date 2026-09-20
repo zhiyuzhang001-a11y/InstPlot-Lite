@@ -522,8 +522,13 @@ fn write_verified_download(
 }
 
 fn launch_installer(path: &Path) -> Result<(), String> {
-    Command::new(path)
-        .args(INSTALLER_ARGS)
+    let mut command = Command::new(path);
+    command.args(INSTALLER_ARGS);
+    #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
+    if let Some(log_path) = std::env::var_os("INSTPLOT_UPDATER_E2E_INSTALL_LOG") {
+        command.arg(format!("/LOG={}", PathBuf::from(log_path).display()));
+    }
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法启动更新安装程序：{error}"))

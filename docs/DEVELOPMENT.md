@@ -48,6 +48,8 @@ To exercise all installer and updater checks without publishing anything, run
 the `InstPlot Lite` workflow manually with `validate_packages` enabled and leave
 `release_tag` empty. This uploads temporary workflow artifacts only; it does not
 create a tag or GitHub Release and does not update OSS.
+For a quicker updater or installer iteration, enable `validate_windows` instead;
+that runs the release gate and complete Windows installer tests only.
 
 ## Download
 
