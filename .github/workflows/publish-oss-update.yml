@@ -19,7 +19,7 @@ on:
       tag:
         description: Existing GitHub release tag to publish to OSS
         required: true
-        default: v0.3.4
+        default: v0.3.5
         type: string
 
 permissions:

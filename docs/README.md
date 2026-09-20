@@ -15,6 +15,7 @@
 - [功能范围](SCOPE.md)
 - [当前实现状态](STATUS.md)
 - [安装包构建与卸载](../packaging/README.md)
+- [v0.3.5 Release Notes](RELEASE_NOTES_v0.3.5.md)
 - [v0.2.0 Release Notes](RELEASE_NOTES_v0.2.0.md)
 - [第三方许可证说明](../THIRD_PARTY_NOTICES.md)
 
