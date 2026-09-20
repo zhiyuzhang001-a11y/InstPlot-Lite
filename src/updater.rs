@@ -156,33 +156,33 @@ impl WindowsUpdater {
 
     pub fn show_toolbar(&mut self, ui: &mut egui::Ui) {
         let context = ui.ctx().clone();
-        let (label, enabled) = match &self.state {
-            UpdateState::Idle | UpdateState::Error(_) => ("检查更新", true),
-            UpdateState::Checking => ("正在检查…", false),
-            UpdateState::Current => ("已是最新版", true),
-            UpdateState::Available(release) => {
-                if ui.button(format!("更新到 {}", release.version)).clicked() {
-                    self.dialog_open = true;
-                }
-                return;
+        let enabled = matches!(
+            self.state,
+            UpdateState::Idle
+                | UpdateState::Current
+                | UpdateState::Available(_)
+                | UpdateState::Error(_)
+        );
+        let response = ui
+            .add(
+                egui::Label::new(
+                    egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .small()
+                        .weak(),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_text(if enabled {
+                "点击检查更新"
+            } else {
+                "正在处理更新"
+            });
+        if enabled && response.clicked() {
+            if matches!(self.state, UpdateState::Available(_)) {
+                self.dialog_open = true;
+            } else {
+                self.start_check(context, true);
             }
-            UpdateState::Downloading {
-                release,
-                downloaded,
-            } => {
-                let percent = downloaded
-                    .saturating_mul(100)
-                    .checked_div(release.size_bytes)
-                    .unwrap_or(0)
-                    .min(100);
-                ui.add_enabled(false, egui::Button::new(format!("正在下载 {percent}%")))
-                    .on_hover_text("下载完成后将自动安装并重新启动");
-                return;
-            }
-            UpdateState::Installing => ("正在安装…", false),
-        };
-        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-            self.start_check(context, true);
         }
     }
 
@@ -198,6 +198,7 @@ impl WindowsUpdater {
             .collapsible(false)
             .resizable(true)
             .default_width(420.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .show(context, |ui| match &self.state {
                 UpdateState::Available(release) => {

@@ -2523,12 +2523,17 @@ impl eframe::App for InstPlotLiteApp {
                 .show(ui.ctx(), |ui| {
                     egui::Frame::NONE
                         .fill(ui.visuals().panel_fill)
-                        .inner_margin(egui::Margin::symmetric(4, 3))
+                        .inner_margin(egui::Margin::symmetric(2, 2))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 #[cfg(any(target_os = "windows", test))]
                                 self.windows_updater.show_toolbar(ui);
-                                ui.weak(format!("v{}", env!("CARGO_PKG_VERSION")));
+                                #[cfg(not(any(target_os = "windows", test)))]
+                                ui.label(
+                                    egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                        .small()
+                                        .weak(),
+                                );
                             });
                         });
                 });
@@ -2547,7 +2552,12 @@ impl eframe::App for InstPlotLiteApp {
             ui.horizontal(|ui| {
                 #[cfg(any(target_os = "windows", test))]
                 self.windows_updater.show_toolbar(ui);
-                ui.weak(format!("v{}", env!("CARGO_PKG_VERSION")));
+                #[cfg(not(any(target_os = "windows", test)))]
+                ui.label(
+                    egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .small()
+                        .weak(),
+                );
             });
             ui.separator();
             names
