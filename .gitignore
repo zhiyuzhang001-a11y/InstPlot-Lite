@@ -8,7 +8,8 @@
 /.agent-token-manager/
 /.cursor/*
 !/.cursor/rules/
-!/.cursor/rules/*.mdc
+/.cursor/rules/*
+!/.cursor/rules/outcome-based-testing.mdc
 /.model-handoff/
 /MODEL_HANDOFF.md
 /docs/MODEL_HANDOFF_PLAYBOOK.md
