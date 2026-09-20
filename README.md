@@ -32,27 +32,27 @@ InstPlot Lite 面向需要快速查看实验数据的学生和科研人员。它
 
 ## 下载与安装
 
-当前公开版本是 **v0.3.3 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.3)向下找到 **Assets**，根据电脑选择文件。
+当前公开版本是 **v0.3.4 未签名预览版**。请在 [Releases 页面](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.4)向下找到 **Assets**，根据电脑选择文件。
 
 > [!NOTE]
-> v0.3.3 修复 Windows 最大化时工具窗口互相遮挡的问题，并增强应用内更新对签名响应和服务器连接的兼容性。
+> v0.3.4 将当前版本号和检查更新入口放到左侧数据栏底部。v0.3.2 的更新器存在 64 字节签名边界错误，必须手动覆盖安装 v0.3.3 或更高版本一次；v0.3.3 及后续版本可以正常自动更新。
 
 ### Windows 10 / 11（64 位）
 
-下载 `InstPlot-Lite-0.3.3-windows-x64-setup.exe`，然后双击安装。安装器不要求管理员权限，并会创建开始菜单入口；安装时可以选择是否创建桌面快捷方式。
+下载 `InstPlot-Lite-0.3.4-windows-x64-setup.exe`，然后双击安装。安装器不要求管理员权限，并会创建开始菜单入口；安装时可以选择是否创建桌面快捷方式。
 
-从 v0.3.2 起，Windows 版本会在后台检查 OSS 上经过 Ed25519 签名的更新清单。发现新版时点击“更新并重启”即可自动下载、校验并运行安装程序。由于安装程序尚无商业代码签名，Windows 仍可能显示“未知发布者”或 SmartScreen 提示；这与应用自身执行的发布签名和 SHA-256 完整性校验是两套机制。
+从 v0.3.3 起，Windows 版本可以可靠检查 OSS 上经过 Ed25519 签名的更新清单。发现新版时点击“更新并重启”即可自动下载、校验并运行安装程序。v0.3.2 用户必须手动覆盖安装 v0.3.3 或更高版本一次。由于安装程序尚无商业代码签名，Windows 仍可能显示“未知发布者”或 SmartScreen 提示；这与应用自身执行的发布签名和 SHA-256 完整性校验是两套机制。
 
 ### macOS
 
-- Apple 芯片（M1、M2、M3、M4 等）：下载 `InstPlot-Lite-0.3.3-macos-arm64.dmg`。
+- Apple 芯片（M1、M2、M3、M4 等）：下载 `InstPlot-Lite-0.3.4-macos-arm64.dmg`。
 
 从 v0.3.1 起仅维护 Apple Silicon（arm64）版本，不再提供或更新 Intel Mac 安装包。打开 DMG 后，将 **InstPlot Lite** 拖入 **Applications（应用程序）**。
 
 ### Linux（64 位）
 
-- Ubuntu / Debian：下载 `instplot-lite_0.3.3_amd64.deb`，用系统的软件安装器打开。
-- 其他兼容发行版：下载 `InstPlot-Lite-0.3.3-linux-x86_64.tar.gz`，解压后运行其中的 `instplot-lite`。
+- Ubuntu / Debian：下载 `instplot-lite_0.3.4_amd64.deb`，用系统的软件安装器打开。
+- 其他兼容发行版：下载 `InstPlot-Lite-0.3.4-linux-x86_64.tar.gz`，解压后运行其中的 `instplot-lite`。
 
 ### 第一次打开时的安全提示
 

@@ -2420,8 +2420,6 @@ impl eframe::App for InstPlotLiteApp {
         ui.horizontal_wrapped(|ui| {
             ui.heading("InstPlot Lite");
             ui.separator();
-            #[cfg(any(target_os = "windows", test))]
-            self.windows_updater.show_toolbar(ui);
             if ui
                 .button(egui::RichText::new("打开文件").strong())
                 .clicked()
@@ -2494,7 +2492,7 @@ impl eframe::App for InstPlotLiteApp {
         let wide_layout = ui.available_width() >= 820.0;
         let column_names = if wide_layout {
             let sidebar_width = self.desired_sidebar_width(ui);
-            egui::Panel::left("data-controls")
+            let names = egui::Panel::left("data-controls")
                 .exact_size(sidebar_width)
                 .resizable(false)
                 .show(ui, |ui| {
@@ -2518,7 +2516,23 @@ impl eframe::App for InstPlotLiteApp {
                     ui.label("右键拖动：平移");
                     names
                 })
-                .inner
+                .inner;
+            egui::Area::new(egui::Id::new("update-and-version-footer"))
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(6.0, -6.0))
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::NONE
+                        .fill(ui.visuals().panel_fill)
+                        .inner_margin(egui::Margin::symmetric(4, 3))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                #[cfg(any(target_os = "windows", test))]
+                                self.windows_updater.show_toolbar(ui);
+                                ui.weak(format!("v{}", env!("CARGO_PKG_VERSION")));
+                            });
+                        });
+                });
+            names
         } else {
             let names = self.show_data_controls(ui, false);
             ui.horizontal_wrapped(|ui| {
@@ -2529,6 +2543,11 @@ impl eframe::App for InstPlotLiteApp {
                 if ui.button("清空").clicked() {
                     self.clear_data();
                 }
+            });
+            ui.horizontal(|ui| {
+                #[cfg(any(target_os = "windows", test))]
+                self.windows_updater.show_toolbar(ui);
+                ui.weak(format!("v{}", env!("CARGO_PKG_VERSION")));
             });
             ui.separator();
             names

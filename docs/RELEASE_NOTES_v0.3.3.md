@@ -15,4 +15,5 @@
 
 此预览版尚无 Windows Authenticode 或 Apple Developer ID 商业签名，因此 Windows SmartScreen 和 macOS Gatekeeper 仍可能显示未知发布者提示。Windows 应用内更新会独立验证 Ed25519 签名、文件大小和 SHA-256，拒绝被替换或损坏的安装包。
 
-已安装 v0.3.2 的 Windows 用户可以在应用内点击“检查更新”，自动下载并安装 v0.3.3。
+> [!IMPORTANT]
+> v0.3.2 的更新器会把恰好 64 字节的有效签名误判为超过读取上限，因此无法通过应用内更新升级。v0.3.2 用户必须手动下载并覆盖安装 v0.3.3 或更高版本一次；从 v0.3.3 起，后续应用内更新可以正常完成。

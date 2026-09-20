@@ -3,7 +3,7 @@
 Updated: 2026-09-20
 
 > [!NOTE]
-> InstPlot Lite is now the current user-facing product. The v0.3.3 unsigned
+> InstPlot Lite is now the current user-facing product. The v0.3.4 unsigned
 > preview contains the core workflow plus formula calculation, multi-curve
 > processing, explicit export-column selection, and reversible overwrite or
 > retain processing results.
@@ -94,7 +94,7 @@ a terminal.
   Sans OFL, and Noto Sans SC OFL texts are now included in every native package.
   CI verifies the installed Windows and Linux license files; the macOS DMG keeps
   them both in a visible folder and inside the installed app bundle.
-- One hundred twelve local tests pass with no compiler warnings, including real XLS and
+- One hundred thirteen local tests pass with no compiler warnings, including real XLS and
   Chinese-header fixtures, multi-sheet XLSX round trips, and column-misalignment
   and no-overwrite regression cases.
 
@@ -166,7 +166,7 @@ same installation lifecycle; the macOS DMG passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the
-[v0.3.3 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.3),
+[v0.3.4 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.4),
 together with a five-entry SHA-256 checksum manifest. The release is
 intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
@@ -175,8 +175,10 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.3.3 preview supports Windows one-click updates from v0.3.2 and
-later. Stable-release promotion still requires release-owner
+The unsigned v0.3.4 preview supports Windows one-click updates from v0.3.3 and
+later. Because v0.3.2 rejects the valid 64-byte update signature at its exact
+reader limit, v0.3.2 users must manually install v0.3.3 or later once.
+Stable-release promotion still requires release-owner
 credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
