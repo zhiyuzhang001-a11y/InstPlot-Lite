@@ -15,6 +15,13 @@ if [[ "$current_branch" != "main" ]]; then
     exit 1
 fi
 
+if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    echo "Release stopped: the working tree is not clean." >&2
+    echo "Commit, stash, or remove every local change before releasing so the published code is unambiguous." >&2
+    git status --short >&2
+    exit 1
+fi
+
 git fetch --quiet origin main --tags
 local_commit=$(git rev-parse HEAD)
 remote_commit=$(git rev-parse origin/main)
