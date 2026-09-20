@@ -96,6 +96,30 @@ jobs:
           $process = Start-Process target/release/instplot-lite.exe -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Release importer check failed" }
 
+  release-gate:
+    name: Release formatting and Clippy gate
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    timeout-minutes: 20
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libwayland-dev
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
   package-macos:
     name: Package macOS (arm64)
     if: >-
@@ -381,7 +405,7 @@ jobs:
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: [package-macos, package-windows, package-linux]
+    needs: [release-gate, package-macos, package-windows, package-linux]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -436,3 +460,52 @@ jobs:
     with:
       tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
     secrets: inherit
+
+  release-status:
+    name: Release result summary
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    needs:
+      - release-gate
+      - package-macos
+      - package-windows
+      - package-linux
+      - release
+      - publish-windows-update
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Report release results
+        env:
+          GATE_RESULT: ${{ needs.release-gate.result }}
+          MACOS_RESULT: ${{ needs.package-macos.result }}
+          WINDOWS_RESULT: ${{ needs.package-windows.result }}
+          LINUX_RESULT: ${{ needs.package-linux.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          OSS_RESULT: ${{ needs.publish-windows-update.result }}
+        run: |
+          {
+            echo "## InstPlot Lite release result"
+            echo
+            echo "- Formatting and Clippy: ${GATE_RESULT}"
+            echo "- macOS package: ${MACOS_RESULT}"
+            echo "- Windows package, install, and updater test: ${WINDOWS_RESULT}"
+            echo "- Linux package: ${LINUX_RESULT}"
+            echo "- GitHub prerelease: ${RELEASE_RESULT}"
+            echo "- OSS signing, upload, and public verification: ${OSS_RESULT}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for result in \
+            "${GATE_RESULT}" \
+            "${MACOS_RESULT}" \
+            "${WINDOWS_RESULT}" \
+            "${LINUX_RESULT}" \
+            "${RELEASE_RESULT}" \
+            "${OSS_RESULT}"
+          do
+            if [ "${result}" != "success" ]; then
+              echo "Release did not complete. Open the failed job above for its exact step and log." >&2
+              exit 1
+            fi
+          done
