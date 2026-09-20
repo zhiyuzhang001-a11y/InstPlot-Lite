@@ -53,7 +53,7 @@ that runs the release gate and complete Windows installer tests only.
 
 ## Download
 
-The [v0.3.6 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.6)
+The [v0.3.7 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.7)
 provides native installers for Windows x64, Apple Silicon Macs, and Linux x64.
 macOS Intel builds are no longer maintained as of v0.3.1. End users do not need
 Rust, Cargo, Python, or a terminal.

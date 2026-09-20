@@ -54,7 +54,7 @@ with:
 
 ```sh
 python3 packaging/windows/prepare-oss-release.py \
-  target/package/InstPlot-Lite-0.3.6-windows-x64-setup.exe \
+  target/package/InstPlot-Lite-0.3.7-windows-x64-setup.exe \
   --private-key /secure/path/update-signing-key.pem \
   --notes "Release notes"
 ```
