@@ -1,9 +1,9 @@
 # InstPlot Lite status
 
-Updated: 2026-09-19
+Updated: 2026-09-20
 
 > [!NOTE]
-> InstPlot Lite is now the current user-facing product. The v0.3.2 unsigned
+> InstPlot Lite is now the current user-facing product. The v0.3.3 unsigned
 > preview contains the core workflow plus formula calculation, multi-curve
 > processing, explicit export-column selection, and reversible overwrite or
 > retain processing results.
@@ -166,7 +166,7 @@ same installation lifecycle; the macOS DMG passed structure, checksum, bundled
 import, and disk-image verification.
 
 The verified artifacts are published in the
-[v0.3.2 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.2),
+[v0.3.3 unsigned preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.3),
 together with a five-entry SHA-256 checksum manifest. The release is
 intentionally marked as a prerelease because macOS Developer ID
 signing/notarization and Windows Authenticode signing require owner-provided
@@ -175,8 +175,8 @@ user-session check, while the import-to-PNG path is automated.
 
 ## Next step
 
-The unsigned v0.3.2 preview is the transition release for future Windows
-one-click updates. Stable-release promotion still requires release-owner
+The unsigned v0.3.3 preview supports Windows one-click updates from v0.3.2 and
+later. Stable-release promotion still requires release-owner
 credentials or hands-on devices:
 
 1. Configure Apple Developer ID signing and notarization.
