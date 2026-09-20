@@ -33,6 +33,7 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
+Name: "restartapp"; Description: "更新完成后重新启动 {#AppName}"; Flags: unchecked; Check: WizardSilent
 
 [Files]
 Source: "{#ReleaseExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -47,10 +48,4 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\instplot-lite.exe"; Tasks: de
 
 [Run]
 Filename: "{app}\instplot-lite.exe"; Description: "启动 {#AppName}"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\instplot-lite.exe"; Flags: nowait skipifnotsilent; Check: UpdateRestartRequested
-
-[Code]
-function UpdateRestartRequested: Boolean;
-begin
-  Result := CompareText(ExpandConstant('{param:RESTARTAPP|0}'), '1') = 0;
-end;
+Filename: "{app}\instplot-lite.exe"; Flags: nowait skipifnotsilent; Tasks: restartapp

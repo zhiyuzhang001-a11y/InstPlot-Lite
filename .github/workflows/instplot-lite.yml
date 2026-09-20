@@ -239,7 +239,7 @@ jobs:
           # Exercise the same silent replacement flags used by the in-app updater.
           $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
           Start-Sleep -Seconds 2
-          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/RESTARTAPP=1", "/SP-", "/DIR=$installDir"
+          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/MERGETASKS=restartapp", "/SP-", "/DIR=$installDir"
           if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
           Start-Sleep -Seconds 2
           if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }

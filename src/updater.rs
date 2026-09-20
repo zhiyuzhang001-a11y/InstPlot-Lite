@@ -28,7 +28,7 @@ const INSTALLER_ARGS: [&str; 7] = [
     "/NORESTART",
     "/CLOSEAPPLICATIONS",
     "/NORESTARTAPPLICATIONS",
-    "/RESTARTAPP=1",
+    "/MERGETASKS=restartapp",
     "/SP-",
 ];
 const UPDATE_PUBLIC_KEY: [u8; 32] = [
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn updater_requests_exactly_one_explicit_application_restart() {
-        assert!(INSTALLER_ARGS.contains(&"/RESTARTAPP=1"));
+        assert!(INSTALLER_ARGS.contains(&"/MERGETASKS=restartapp"));
         assert!(INSTALLER_ARGS.contains(&"/NORESTARTAPPLICATIONS"));
         assert!(!INSTALLER_ARGS.contains(&"/RESTARTAPPLICATIONS"));
     }
