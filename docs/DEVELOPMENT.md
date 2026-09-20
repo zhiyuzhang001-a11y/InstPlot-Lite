@@ -31,13 +31,15 @@ After committing and pushing the version bump and
 scripts/release.sh
 ```
 
-The command requires a clean working tree, validates that local `main` matches
-`origin/main`, derives the tag from `Cargo.toml`, and hands the release to
-GitHub Actions. It then exits; the computer does not need to remain awake.
-GitHub independently builds and tests all supported packages, creates the
-version tag and prerelease, publishes the signed Windows update to OSS, and
-verifies the public download. Ordinary pushes run quality checks only, so
-release packages are no longer built twice.
+The command requires that release-relevant files are committed: application
+code, assets, packaging, CI configuration, manifest files, and release notes.
+Unrelated local drafts and temporary data do not block a release. It validates
+that local `main` matches `origin/main`, derives the tag from `Cargo.toml`, and
+hands the release to GitHub Actions. It then exits; the computer does not need
+to remain awake. GitHub independently builds and tests all supported packages,
+creates the version tag and prerelease, publishes the signed Windows update to
+OSS, and verifies the public download. Ordinary pushes run quality checks only,
+so release packages are no longer built twice.
 
 ## Download
 

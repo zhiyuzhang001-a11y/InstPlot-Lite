@@ -15,10 +15,25 @@ if [[ "$current_branch" != "main" ]]; then
     exit 1
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-    echo "Release stopped: the working tree is not clean." >&2
-    echo "Commit, stash, or remove every local change before releasing so the published code is unambiguous." >&2
-    git status --short >&2
+release_relevant_changes=()
+while IFS= read -r changed_path; do
+    case "$changed_path" in
+        Cargo.toml|Cargo.lock|rust-toolchain.toml|src/*|assets/*|packaging/*|.github/*|InP_logo.png|logo.ico|LICENSE|THIRD_PARTY_NOTICES.md|.gitattributes|docs/RELEASE_NOTES_*.md)
+            release_relevant_changes+=("$changed_path")
+            ;;
+    esac
+done < <(
+    {
+        git diff --name-only
+        git diff --cached --name-only
+        git ls-files --others --exclude-standard
+    } | sort -u
+)
+
+if ((${#release_relevant_changes[@]})); then
+    echo "Release stopped: uncommitted release-relevant files are present." >&2
+    printf '  %s\n' "${release_relevant_changes[@]}" >&2
+    echo "Commit, stash, or remove these files before releasing so the published code is unambiguous." >&2
     exit 1
 fi
 
