@@ -38,7 +38,10 @@ that local `main` matches `origin/main`, derives the tag from `Cargo.toml`, and
 hands the release to GitHub Actions. It then exits; the computer does not need
 to remain awake. GitHub independently builds and tests all supported packages,
 creates the version tag and prerelease, publishes the signed Windows update to
-OSS, and verifies the public download. Ordinary pushes run quality checks only,
+OSS, and verifies the public download. It starts immediately: if the same
+commit still has an ordinary push quality run in progress, the script cancels
+that duplicate run because the release workflow performs the complete set of
+checks itself. Ordinary pushes run quality checks only,
 so release packages are no longer built twice.
 
 ## Download

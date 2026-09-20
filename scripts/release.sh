@@ -70,6 +70,23 @@ if git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null
 fi
 
 gh auth status >/dev/null
+
+# A dispatch release repeats every validation that matters (formatting, Clippy,
+# tests, packaging and platform smoke checks).  A push-triggered quality run
+# for this exact commit would therefore only duplicate work.  Stop it if it is
+# still pending so releasing starts immediately; a completed run is left as a
+# useful extra record.
+quality_run_id=$(gh run list \
+    --workflow instplot-lite.yml \
+    --commit "$local_commit" \
+    --json databaseId,event,status \
+    --jq '.[] | select(.event == "push" and (.status == "queued" or .status == "in_progress")) | .databaseId' \
+    | head -n 1)
+if [[ -n "$quality_run_id" ]]; then
+    gh run cancel "$quality_run_id"
+    echo "Cancelled duplicate push quality run ${quality_run_id}; the release workflow runs its own full validation."
+fi
+
 gh workflow run instplot-lite.yml --ref main -f "release_tag=${release_tag}"
 
 repository=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
