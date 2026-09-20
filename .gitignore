@@ -6,7 +6,9 @@
 
 # Local agent and handoff state
 /.agent-token-manager/
-/.cursor/
+/.cursor/*
+!/.cursor/rules/
+!/.cursor/rules/*.mdc
 /.model-handoff/
 /MODEL_HANDOFF.md
 /docs/MODEL_HANDOFF_PLAYBOOK.md

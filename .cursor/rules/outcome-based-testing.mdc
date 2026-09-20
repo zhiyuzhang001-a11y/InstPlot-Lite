@@ -1,0 +1,17 @@
+---
+description: Require tests and release claims to verify real observable outcomes
+alwaysApply: true
+---
+
+# Outcome-Based Testing
+
+- Define the user-visible acceptance result before implementing or testing a change.
+- A successful command, exit code, log line, callback, or created file is necessary evidence, but is not sufficient when the feature promises a later observable result.
+- Test the complete path at the closest practical level to a real user environment.
+- For Windows updates, verify download and signature checks, old-process closure, installed-file replacement, and creation of the new application process. Do not infer restart success from installer logs alone.
+- For exports, reopen the produced file and verify its structure, values, metadata, and source/fit relationships; file existence alone is insufficient.
+- For data processing and fitting, verify numerical results, target selection, preserved visibility/state, undo/redo behavior, and failure atomicity.
+- Prefer operating-system events, parsed output files, state inspection, or end-to-end behavior over assertions about implementation details.
+- Keep production code and test instrumentation simple. Do not add persistent helper programs or user-facing complexity solely to make a test pass when a direct platform mechanism exists.
+- When CI cannot reproduce an interactive GUI result, automate the strongest observable proxy, explicitly document the remaining boundary, and require a real-device check before claiming the GUI behavior is fully verified.
+- Do not report a feature as fixed or a release as ready when a critical user outcome is covered only by an intermediate assertion.
