@@ -44,6 +44,11 @@ that duplicate run because the release workflow performs the complete set of
 checks itself. Ordinary pushes run quality checks only,
 so release packages are no longer built twice.
 
+To exercise all installer and updater checks without publishing anything, run
+the `InstPlot Lite` workflow manually with `validate_packages` enabled and leave
+`release_tag` empty. This uploads temporary workflow artifacts only; it does not
+create a tag or GitHub Release and does not update OSS.
+
 ## Download
 
 The [v0.3.5 unsigned preview release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.5)

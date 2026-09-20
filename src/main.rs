@@ -58,10 +58,12 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    let app_icon = application_icon();
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1040.0, 780.0])
-            .with_min_inner_size([720.0, 580.0]),
+            .with_min_inner_size([720.0, 580.0])
+            .with_icon(app_icon),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -77,6 +79,30 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+fn application_icon() -> eframe::egui::IconData {
+    const ICON_SIZE: u32 = 128;
+    let source = eframe::icon_data::from_png_bytes(include_bytes!("../InP_logo.png"))
+        .expect("embedded application icon must be valid PNG");
+    if source.width <= ICON_SIZE && source.height <= ICON_SIZE {
+        return source;
+    }
+
+    let mut rgba = Vec::with_capacity((ICON_SIZE * ICON_SIZE * 4) as usize);
+    for y in 0..ICON_SIZE {
+        let source_y = y * source.height / ICON_SIZE;
+        for x in 0..ICON_SIZE {
+            let source_x = x * source.width / ICON_SIZE;
+            let offset = ((source_y * source.width + source_x) * 4) as usize;
+            rgba.extend_from_slice(&source.rgba[offset..offset + 4]);
+        }
+    }
+    eframe::egui::IconData {
+        rgba,
+        width: ICON_SIZE,
+        height: ICON_SIZE,
+    }
 }
 
 struct StartupArguments {
@@ -123,5 +149,24 @@ fn startup_arguments() -> StartupArguments {
         check_only,
         #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
         updater_e2e_status,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_application_icon_is_small_and_valid() {
+        let icon = application_icon();
+        assert_eq!((icon.width, icon.height), (128, 128));
+        assert_eq!(icon.rgba.len(), 128 * 128 * 4);
+        assert!(
+            icon.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 0)
+        );
     }
 }

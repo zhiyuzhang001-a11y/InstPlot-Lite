@@ -9,6 +9,7 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "build.rs"
       - "rust-toolchain.toml"
       - "src/**"
       - "assets/**"
@@ -26,6 +27,7 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "build.rs"
       - "rust-toolchain.toml"
       - "src/**"
       - "assets/**"
@@ -45,6 +47,11 @@ on:
         description: "Optional release tag (for example v0.3.5); leave empty to run checks only"
         required: false
         type: string
+      validate_packages:
+        description: "Build and test installers without publishing a release"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -57,7 +64,8 @@ jobs:
     name: Quality (${{ matrix.os }})
     if: >-
       !startsWith(github.ref, 'refs/tags/v') &&
-      !(github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+      !(github.event_name == 'workflow_dispatch' &&
+      (inputs.release_tag != '' || inputs.validate_packages))
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -100,7 +108,8 @@ jobs:
     name: Release formatting and Clippy gate
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.release_tag != '' || inputs.validate_packages))
     timeout-minutes: 20
     runs-on: ubuntu-22.04
     steps:
@@ -127,7 +136,8 @@ jobs:
     name: Package macOS (arm64)
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.release_tag != '' || inputs.validate_packages))
     timeout-minutes: 35
     runs-on: macos-15
     steps:
@@ -157,7 +167,8 @@ jobs:
     name: Package Windows (x64)
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.release_tag != '' || inputs.validate_packages))
     timeout-minutes: 35
     runs-on: windows-latest
     defaults:
@@ -174,6 +185,19 @@ jobs:
         run: |
           cargo test --locked
           cargo build --release --locked
+
+      - name: Verify embedded Windows icon
+        run: |
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class InstPlotIconResource {
+            [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+            public static extern uint ExtractIconEx(string file, int index, IntPtr[] large, IntPtr[] small, uint count);
+          }
+          '@
+          $iconCount = [InstPlotIconResource]::ExtractIconEx((Resolve-Path "target/release/instplot-lite.exe"), -1, $null, $null, 0)
+          if ($iconCount -lt 1) { throw "Windows executable does not contain an icon resource" }
 
       - name: Read package version
         run: |
@@ -215,11 +239,20 @@ jobs:
           # Exercise the same silent replacement flags used by the in-app updater.
           $runningApp = Start-Process "$installDir\instplot-lite.exe" -PassThru
           Start-Sleep -Seconds 2
-          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS", "/SP-", "/DIR=$installDir"
+          $process = Start-Process $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/RESTARTAPP=1", "/SP-", "/DIR=$installDir"
           if ($process.ExitCode -ne 0) { throw "Update-style reinstall exited with $($process.ExitCode)" }
           Start-Sleep -Seconds 2
           if (-not $runningApp.HasExited) { throw "Update-style reinstall did not close the running app" }
-          Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Stop-Process -Force
+          $restartedApp = $null
+          1..30 | ForEach-Object {
+            if (-not $restartedApp) {
+              $restartedApp = Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$installDir\instplot-lite.exe" } | Select-Object -First 1
+            }
+            if (-not $restartedApp) { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $restartedApp) { throw "Update-style reinstall did not restart the updated app" }
+          $restartedApp | Stop-Process -Force
+          $restartedApp.WaitForExit()
           $process = Start-Process "$installDir\instplot-lite.exe" -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
           if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
 
@@ -333,6 +366,16 @@ jobs:
               if (-not $updated) { Start-Sleep -Seconds 1 }
             }
             if (-not $updated) { throw "In-app updater did not install the candidate executable" }
+            $restartedApp = $null
+            1..30 | ForEach-Object {
+              if (-not $restartedApp) {
+                $restartedApp = Get-Process -Name "instplot-lite" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExe } | Select-Object -First 1
+              }
+              if (-not $restartedApp) { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $restartedApp) { throw "In-app updater did not restart the updated app" }
+            $restartedApp | Stop-Process -Force
+            $restartedApp.WaitForExit()
             $process = Start-Process $installedExe -Wait -PassThru -ArgumentList "--check", "tests/fixtures/smoke.csv"
             if ($process.ExitCode -ne 0) { throw "Updated executable smoke check failed" }
           } finally {
@@ -356,7 +399,8 @@ jobs:
     name: Package Linux (x64)
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.release_tag != '' || inputs.validate_packages))
     timeout-minutes: 35
     runs-on: ubuntu-22.04
     steps:

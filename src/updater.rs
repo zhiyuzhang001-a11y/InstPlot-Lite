@@ -22,6 +22,15 @@ const SIGNATURE_URL_PREFIX: &str =
     "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-lite/stable/signatures/";
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+const INSTALLER_ARGS: [&str; 7] = [
+    "/VERYSILENT",
+    "/SUPPRESSMSGBOXES",
+    "/NORESTART",
+    "/CLOSEAPPLICATIONS",
+    "/NORESTARTAPPLICATIONS",
+    "/RESTARTAPP=1",
+    "/SP-",
+];
 const UPDATE_PUBLIC_KEY: [u8; 32] = [
     0xe0, 0x08, 0x91, 0x87, 0x1d, 0x27, 0x2e, 0x89, 0x4b, 0xb2, 0xa6, 0xb3, 0x0c, 0x77, 0x71, 0x3d,
     0x71, 0xa7, 0xaf, 0x30, 0x11, 0x41, 0xd7, 0xf9, 0x23, 0xe4, 0xa8, 0x6a, 0x5f, 0x8e, 0xe8, 0x22,
@@ -514,14 +523,7 @@ fn write_verified_download(
 
 fn launch_installer(path: &Path) -> Result<(), String> {
     Command::new(path)
-        .args([
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/CLOSEAPPLICATIONS",
-            "/RESTARTAPPLICATIONS",
-            "/SP-",
-        ])
+        .args(INSTALLER_ARGS)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法启动更新安装程序：{error}"))
@@ -574,6 +576,13 @@ pub fn run_e2e(status_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_requests_exactly_one_explicit_application_restart() {
+        assert!(INSTALLER_ARGS.contains(&"/RESTARTAPP=1"));
+        assert!(INSTALLER_ARGS.contains(&"/NORESTARTAPPLICATIONS"));
+        assert!(!INSTALLER_ARGS.contains(&"/RESTARTAPPLICATIONS"));
+    }
 
     fn decode_hex<const N: usize>(text: &str) -> [u8; N] {
         assert_eq!(text.len(), N * 2);

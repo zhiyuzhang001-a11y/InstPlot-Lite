@@ -18,7 +18,7 @@ fi
 release_relevant_changes=()
 while IFS= read -r changed_path; do
     case "$changed_path" in
-        Cargo.toml|Cargo.lock|rust-toolchain.toml|src/*|assets/*|packaging/*|.github/*|InP_logo.png|logo.ico|LICENSE|THIRD_PARTY_NOTICES.md|.gitattributes|docs/RELEASE_NOTES_*.md)
+        Cargo.toml|Cargo.lock|build.rs|rust-toolchain.toml|src/*|assets/*|packaging/*|.github/*|InP_logo.png|logo.ico|LICENSE|THIRD_PARTY_NOTICES.md|.gitattributes|docs/RELEASE_NOTES_*.md)
             release_relevant_changes+=("$changed_path")
             ;;
     esac
