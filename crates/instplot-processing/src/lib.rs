@@ -1,5 +1,9 @@
 use std::fmt;
 
+mod adapter;
+
+pub use adapter::apply_to_dataset;
+
 #[derive(Clone, Debug)]
 pub enum ProcessingOperation {
     Center,

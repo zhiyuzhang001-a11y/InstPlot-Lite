@@ -1246,6 +1246,10 @@ dependencies = [
 [[package]]
 name = "instplot-processing"
 version = "0.1.0"
+dependencies = [
+ "instplot-core",
+ "instplot-fitting",
+]
 
 [[package]]
 name = "itertools"

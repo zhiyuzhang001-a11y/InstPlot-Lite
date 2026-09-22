@@ -6,3 +6,5 @@ description = "Shared numerical data processing for InstPlot applications"
 license = "MIT"
 
 [dependencies]
+instplot-core = { path = "../instplot-core" }
+instplot-fitting = { path = "../instplot-fitting" }
