@@ -18,8 +18,9 @@ repository.
 
 ```sh
 cargo run
-cargo test
-cargo build --release
+cargo test --workspace --locked
+cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo build --release --locked --package instplot-lite
 ```
 
 ## One-command release

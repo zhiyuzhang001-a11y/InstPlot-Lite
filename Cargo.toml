@@ -1,3 +1,13 @@
+[workspace]
+members = [
+    ".",
+    "crates/instplot-core",
+    "crates/instplot-fitting",
+    "crates/instplot-io",
+    "crates/instplot-processing",
+]
+resolver = "3"
+
 [package]
 name = "instplot-lite"
 version = "0.3.7"

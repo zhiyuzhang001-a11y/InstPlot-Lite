@@ -90,13 +90,13 @@ jobs:
         run: rustup show
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Run tests
-        run: cargo test --locked
+        run: cargo test --workspace --locked
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --package instplot-lite
 
       - name: Check release importer
         if: runner.os != 'Windows'
@@ -132,10 +132,10 @@ jobs:
         run: rustup component add clippy
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
   package-macos:
     name: Package macOS (arm64)
@@ -153,8 +153,8 @@ jobs:
 
       - name: Test and build
         run: |
-          cargo test --locked
-          cargo build --release --locked
+          cargo test --workspace --locked
+          cargo build --release --locked --package instplot-lite
 
       - name: Build and verify DMG
         env:
@@ -188,8 +188,8 @@ jobs:
 
       - name: Test and build
         run: |
-          cargo test --locked
-          cargo build --release --locked
+          cargo test --workspace --locked
+          cargo build --release --locked --package instplot-lite
 
       - name: Verify embedded Windows icon
         run: |
@@ -325,7 +325,7 @@ jobs:
 
           # Build an installed "old" client with the isolated E2E entrypoint.
           # Production packages never enable this feature or accept endpoint overrides.
-          cargo build --release --locked --features updater-e2e
+          cargo build --release --locked --package instplot-lite --features updater-e2e
           $oldHash = (Get-FileHash -Algorithm SHA256 target/release/instplot-lite.exe).Hash
           $candidateHash = (Get-FileHash -Algorithm SHA256 $candidateExe).Hash
           if ($oldHash -eq $candidateHash) { throw "Old and candidate executables must differ" }
@@ -421,8 +421,8 @@ jobs:
 
       - name: Test and build
         run: |
-          cargo test --locked
-          cargo build --release --locked
+          cargo test --workspace --locked
+          cargo build --release --locked --package instplot-lite
 
       - name: Build DEB and portable archive
         env:
