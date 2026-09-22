@@ -1,0 +1,8 @@
+[package]
+name = "instplot-core"
+version = "0.1.0"
+edition = "2024"
+description = "Shared data model and identity for InstPlot applications"
+license = "MIT"
+
+[dependencies]

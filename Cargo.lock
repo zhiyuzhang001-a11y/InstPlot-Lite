@@ -1199,6 +1199,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "instplot-core"
+version = "0.1.0"
+
+[[package]]
 name = "instplot-lite"
 version = "0.3.7"
 dependencies = [
@@ -1210,6 +1214,7 @@ dependencies = [
  "egui_plot",
  "encoding_rs",
  "fasteval2",
+ "instplot-core",
  "nalgebra",
  "png",
  "rfd",
