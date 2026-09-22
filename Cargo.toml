@@ -12,18 +12,14 @@ default = []
 updater-e2e = []
 
 [dependencies]
-calamine = "0.36.1"
-chardetng = "1.0.0"
-csv = "1.4.0"
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui_plot = "0.37.0"
-encoding_rs = "0.8.35"
 fasteval2 = "2.1.1"
 instplot-core = { path = "crates/instplot-core" }
+instplot-io = { path = "crates/instplot-io" }
 nalgebra = { version = "0.33.2", default-features = false, features = ["std"] }
 png = "0.18.0"
 rfd = "0.17.2"
-rust_xlsxwriter = "0.99.0"
 
 [target.'cfg(windows)'.dependencies]
 ed25519-dalek = "3.0.0"

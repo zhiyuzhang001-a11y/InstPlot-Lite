@@ -1203,22 +1203,30 @@ name = "instplot-core"
 version = "0.1.0"
 
 [[package]]
-name = "instplot-lite"
-version = "0.3.7"
+name = "instplot-io"
+version = "0.1.0"
 dependencies = [
  "calamine",
  "chardetng",
  "csv",
+ "encoding_rs",
+ "instplot-core",
+ "rust_xlsxwriter",
+]
+
+[[package]]
+name = "instplot-lite"
+version = "0.3.7"
+dependencies = [
  "ed25519-dalek",
  "eframe",
  "egui_plot",
- "encoding_rs",
  "fasteval2",
  "instplot-core",
+ "instplot-io",
  "nalgebra",
  "png",
  "rfd",
- "rust_xlsxwriter",
  "semver",
  "serde",
  "serde_json",

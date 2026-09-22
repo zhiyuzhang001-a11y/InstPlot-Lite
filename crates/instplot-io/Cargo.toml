@@ -1,0 +1,14 @@
+[package]
+name = "instplot-io"
+version = "0.1.0"
+edition = "2024"
+description = "Shared data import and export for InstPlot applications"
+license = "MIT"
+
+[dependencies]
+calamine = "0.36.1"
+chardetng = "1.0.0"
+csv = "1.4.0"
+encoding_rs = "=0.8.35"
+instplot-core = { path = "../instplot-core" }
+rust_xlsxwriter = "=0.99.0"
