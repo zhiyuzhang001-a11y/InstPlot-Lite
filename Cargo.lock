@@ -1203,6 +1203,14 @@ name = "instplot-core"
 version = "0.1.0"
 
 [[package]]
+name = "instplot-fitting"
+version = "0.1.0"
+dependencies = [
+ "fasteval2",
+ "nalgebra",
+]
+
+[[package]]
 name = "instplot-io"
 version = "0.1.0"
 dependencies = [
@@ -1221,11 +1229,10 @@ dependencies = [
  "ed25519-dalek",
  "eframe",
  "egui_plot",
- "fasteval2",
  "instplot-core",
+ "instplot-fitting",
  "instplot-io",
  "instplot-processing",
- "nalgebra",
  "png",
  "rfd",
  "semver",

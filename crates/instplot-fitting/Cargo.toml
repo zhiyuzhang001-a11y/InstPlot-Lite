@@ -1,0 +1,10 @@
+[package]
+name = "instplot-fitting"
+version = "0.1.0"
+edition = "2024"
+description = "Shared fitting and expression evaluation for InstPlot applications"
+license = "MIT"
+
+[dependencies]
+fasteval2 = "=2.1.1"
+nalgebra = { version = "=0.33.3", default-features = false, features = ["std"] }

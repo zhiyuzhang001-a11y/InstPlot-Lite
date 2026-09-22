@@ -14,11 +14,10 @@ updater-e2e = []
 [dependencies]
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui_plot = "0.37.0"
-fasteval2 = "2.1.1"
 instplot-core = { path = "crates/instplot-core" }
+instplot-fitting = { path = "crates/instplot-fitting" }
 instplot-io = { path = "crates/instplot-io" }
 instplot-processing = { path = "crates/instplot-processing" }
-nalgebra = { version = "0.33.2", default-features = false, features = ["std"] }
 png = "0.18.0"
 rfd = "0.17.2"
 
