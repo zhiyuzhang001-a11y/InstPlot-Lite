@@ -1224,6 +1224,7 @@ dependencies = [
  "fasteval2",
  "instplot-core",
  "instplot-io",
+ "instplot-processing",
  "nalgebra",
  "png",
  "rfd",
@@ -1234,6 +1235,10 @@ dependencies = [
  "ureq",
  "winresource",
 ]
+
+[[package]]
+name = "instplot-processing"
+version = "0.1.0"
 
 [[package]]
 name = "itertools"

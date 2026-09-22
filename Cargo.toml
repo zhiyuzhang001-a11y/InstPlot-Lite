@@ -17,6 +17,7 @@ egui_plot = "0.37.0"
 fasteval2 = "2.1.1"
 instplot-core = { path = "crates/instplot-core" }
 instplot-io = { path = "crates/instplot-io" }
+instplot-processing = { path = "crates/instplot-processing" }
 nalgebra = { version = "0.33.2", default-features = false, features = ["std"] }
 png = "0.18.0"
 rfd = "0.17.2"

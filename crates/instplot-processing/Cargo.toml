@@ -1,0 +1,8 @@
+[package]
+name = "instplot-processing"
+version = "0.1.0"
+edition = "2024"
+description = "Shared numerical data processing for InstPlot applications"
+license = "MIT"
+
+[dependencies]
