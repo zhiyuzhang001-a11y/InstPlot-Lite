@@ -1411,7 +1411,6 @@ impl eframe::App for InstPlotLiteApp {
         }
         #[cfg(any(target_os = "windows", test))]
         self.windows_updater.show_dialog(ui.ctx());
-        ui.separator();
         let wide_layout = ui.available_width() >= 820.0;
         let column_names = if wide_layout {
             let sidebar_width = self.desired_sidebar_width(ui);

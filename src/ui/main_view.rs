@@ -43,39 +43,48 @@ pub fn show_toolbar(
     can_redo: bool,
 ) -> Vec<MainAction> {
     let mut actions = Vec::new();
-    let layout = toolbar_layout(ui.available_width());
-    egui::Frame::NONE.fill(SHELL_BG).show(ui, |ui| {
-        shell_scope(ui, |ui| {
-            ui.add_space(SPACE_XS);
-            match layout {
-                ToolbarLayout::SingleRow => {
-                    ui.horizontal(|ui| {
-                        show_app_name(ui);
-                        ui.add_space(SPACE_LG);
-                        show_file_actions(ui, has_data, &mut actions);
-                        ui.add_space(SPACE_LG);
-                        show_analysis_actions(ui, has_data, &mut actions);
-                        ui.add_space(SPACE_LG);
-                        show_history_actions(ui, can_undo, can_redo, &mut actions);
-                    });
-                }
-                ToolbarLayout::TwoRows => {
-                    ui.vertical(|ui| {
+    let available_width = ui.available_width();
+    let layout = toolbar_layout(available_width);
+    egui::Frame::NONE
+        .fill(SHELL_BG)
+        .inner_margin(egui::Margin {
+            left: SPACE_SM as i8,
+            right: SPACE_SM as i8,
+            top: (SPACE_XS + 2.0) as i8,
+            bottom: (SPACE_SM - 1.0) as i8,
+        })
+        .show(ui, |ui| {
+            shell_scope(ui, |ui| {
+                ui.set_min_width((available_width - 2.0 * SPACE_SM).max(0.0));
+                match layout {
+                    ToolbarLayout::SingleRow => {
                         ui.horizontal(|ui| {
                             show_app_name(ui);
                             ui.add_space(SPACE_LG);
                             show_file_actions(ui, has_data, &mut actions);
-                        });
-                        ui.horizontal(|ui| {
+                            ui.add_space(SPACE_LG);
                             show_analysis_actions(ui, has_data, &mut actions);
                             ui.add_space(SPACE_LG);
                             show_history_actions(ui, can_undo, can_redo, &mut actions);
                         });
-                    });
+                    }
+                    ToolbarLayout::TwoRows => {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                show_app_name(ui);
+                                ui.add_space(SPACE_LG);
+                                show_file_actions(ui, has_data, &mut actions);
+                            });
+                            ui.horizontal(|ui| {
+                                show_analysis_actions(ui, has_data, &mut actions);
+                                ui.add_space(SPACE_LG);
+                                show_history_actions(ui, can_undo, can_redo, &mut actions);
+                            });
+                        });
+                    }
                 }
-            }
+            })
         });
-    });
     actions
 }
 
