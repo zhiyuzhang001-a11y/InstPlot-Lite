@@ -23,6 +23,28 @@ cargo clippy --workspace --locked --all-targets -- -D warnings
 cargo build --release --locked --package instplot-lite
 ```
 
+## Source layout
+
+The desktop binary keeps lifecycle and cross-feature coordination in
+`src/app.rs`. File importing and screenshot coordination live in `src/app/`.
+UI modules under `src/ui/` render the main frame, tool windows, plot series and
+plot interactions; they return explicit actions or responses instead of
+performing file I/O, numerical processing, history mutation or persistent
+application changes. Persistent fit overlays and their source associations are
+stored in `src/session.rs`.
+
+Numerical and file-format behavior remains in the workspace crates:
+
+- `instplot-core`: dataset model and point operations.
+- `instplot-io`: text/Excel import and all data export formats.
+- `instplot-processing`: processing algorithms and formula evaluation.
+- `instplot-fitting`: fit models, custom expressions and fit-result formatting.
+
+See [the consolidation design](CODE_CONSOLIDATION_PLAN.md) and
+[its execution record](CODE_CONSOLIDATION_EXECUTION.md) before changing these
+boundaries. UI-only refactors must preserve user-visible behavior and keep the
+action flow directed from `app` to `ui`.
+
 ## One-command release
 
 After committing and pushing the version bump and

@@ -38,24 +38,21 @@
 
 这些职责互相耦合，使得局部修改更难确认影响范围。代码整合应优先解决这个问题，而不是重写已经稳定的算法 crate。
 
-## 建议的目标结构
+## 实际完成结构
 
-目标结构可以根据 Rust 借用关系微调，但职责边界应保持如下：
+本轮整合最终采用如下结构。应用动作的执行仍保留在 `app.rs`，避免为了拆文件公开大量应用字段；窗口绘制、格式化、绘图构建和交互已经独立：
 
 ```text
 src/
 ├── app.rs                    # InstPlotLiteApp、生命周期和各模块协调
 ├── app/
-│   ├── state.rs              # 不需要被 UI 导入的应用协调状态及默认值
 │   ├── import.rs             # 文件选择、载入和导入后的状态同步
-│   ├── export.rs             # 应用层导出流程，不包含底层文件编码
-│   ├── processing.rs         # 数据处理动作与应用状态的连接
-│   ├── fitting.rs            # 拟合动作与应用状态的连接
 │   └── screenshot.rs         # 截图请求、结果接收和图片保存协调
 ├── ui/
 │   ├── mod.rs
 │   ├── main_view.rs          # 顶部工具栏、侧栏、状态栏和主布局
-│   ├── plot.rs               # 绘图、图例、坐标交互和可见性
+│   ├── plot_series.rs        # 原始曲线、点、拟合 overlay 和图例系列
+│   ├── plot_view.rs          # 坐标、可见性、缩放、平移、选择和删除请求
 │   ├── tool_window.rs        # 小窗口公共壳、滚动、关闭、置顶和嵌入判断
 │   ├── delete_confirmation.rs # 删除确认界面，只返回确认/取消操作
 │   ├── export_window.rs      # 导出窗口内容
@@ -75,7 +72,11 @@ src/
 └── main.rs
 ```
 
-不要求一次建立所有文件。如果某个拆分只会制造循环依赖或大量公开字段，应先保留在 `app.rs`，待公共接口稳定后再移动。
+计划中的 `app/state.rs`、`app/export.rs`、`app/processing.rs` 和
+`app/fitting.rs` 没有建立：这些模块若要独立执行动作，需要公开或转接大量
+`InstPlotLiteApp` 字段，实际只会增加借用冲突和样板代码。对应 UI 已经通过
+`ExportAction`、`ProcessingAction` 和 `FitAction` 与应用协调层隔离；后续仅在
+出现第二个调用方或可独立测试的应用服务边界时再考虑继续拆分。
 
 ### 模块依赖和 UI 操作规则
 
