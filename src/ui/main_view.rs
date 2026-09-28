@@ -1,6 +1,9 @@
 use eframe::egui;
 
-use super::export_window::DataExportFormat;
+use super::{
+    export_window::DataExportFormat,
+    theme::{SPACE_LG, SPACE_MD, SPACE_XS},
+};
 
 pub const STATUS_ROW_HEIGHT: f32 = 22.0;
 pub const STATUS_BOTTOM_INSET: f32 = 15.0;
@@ -30,7 +33,7 @@ pub fn show_toolbar(
     can_redo: bool,
 ) -> Vec<MainAction> {
     let mut actions = Vec::new();
-    ui.add_space(4.0);
+    ui.add_space(SPACE_XS);
     ui.horizontal_wrapped(|ui| {
         ui.heading("InstPlot Lite");
         ui.separator();
@@ -108,7 +111,7 @@ pub fn show_wide_sidebar<R>(
             ui.heading("数据");
             ui.separator();
             let value = show_data_controls(ui);
-            ui.add_space(12.0);
+            ui.add_space(SPACE_MD);
             ui.horizontal(|ui| {
                 if ui.button("复位视图").clicked() {
                     action = SidebarAction::ResetView;
@@ -117,7 +120,7 @@ pub fn show_wide_sidebar<R>(
                     action = SidebarAction::Clear;
                 }
             });
-            ui.add_space(14.0);
+            ui.add_space(SPACE_LG);
             ui.separator();
             ui.label("左键：点选或框选删除");
             ui.label("滚轮：缩放");

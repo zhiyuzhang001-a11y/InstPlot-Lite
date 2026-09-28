@@ -4,6 +4,7 @@ use crate::processing::Anchor;
 
 use super::{
     formatting::anchor_name,
+    theme::SPACE_MD,
     tool_window::{processing_viewport_id, show_embedded_window_close_control, show_tool_viewport},
 };
 
@@ -138,9 +139,9 @@ pub(crate) fn show(
                 .scroll_source(egui::scroll_area::ScrollSource::ALL)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_space(12.0);
+                    ui.add_space(SPACE_MD);
                     ui.indent("processing-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
+                        ui.spacing_mut().item_spacing.y = SPACE_MD;
                         ui.horizontal(|ui| {
                             ui.label("结果写入：");
                             ui.selectable_value(
@@ -385,7 +386,7 @@ pub(crate) fn show(
                             "公式和系数支持 + − × ÷ ^、括号、sin、cos、tan、exp、ln/log、sqrt、abs、arctan，以及 pi、e。",
                         );
                     });
-                    ui.add_space(12.0);
+                    ui.add_space(SPACE_MD);
                 });
         },
     );

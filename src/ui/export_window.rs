@@ -3,6 +3,7 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 use super::{
     formatting::compact_label,
     selection::sole_selected_index,
+    theme::SPACE_SM,
     tool_window::{export_viewport_id, show_embedded_window_close_control, show_tool_viewport},
 };
 
@@ -105,9 +106,9 @@ pub(crate) fn show(
                 .scroll_source(egui::scroll_area::ScrollSource::ALL)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_SM);
                     ui.indent("export-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = 9.0;
+                        ui.spacing_mut().item_spacing.y = SPACE_SM;
                         ui.label("选择要导出的数据集或曲线。");
                         ui.small("实时拟合结果会随其关联数据集一起导出。");
                         ui.horizontal_wrapped(|ui| {
@@ -225,7 +226,7 @@ pub(crate) fn show(
                             }
                         }
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_SM);
                 });
         },
     );

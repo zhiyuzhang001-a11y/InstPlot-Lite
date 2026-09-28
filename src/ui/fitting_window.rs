@@ -1,5 +1,6 @@
 use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 
+use super::theme::{CONTROL_RADIUS, SPACE_MD, SPACE_SM, SPACE_XS};
 use super::tool_window::{
     fitting_viewport_id, show_embedded_window_close_control, show_tool_viewport,
 };
@@ -133,9 +134,9 @@ pub(crate) fn show(
                 .scroll_source(egui::scroll_area::ScrollSource::ALL)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_space(12.0);
+                    ui.add_space(SPACE_MD);
                     ui.indent("fit-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
+                        ui.spacing_mut().item_spacing.y = SPACE_MD;
                         ui.label(
                             "使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。",
                         );
@@ -259,7 +260,7 @@ pub(crate) fn show(
                             }
                         });
                         if settings.kind == FitKind::Custom {
-                            ui.add_space(6.0);
+                            ui.add_space(SPACE_SM);
                             editable_fit_field(
                                 ui,
                                 "函数表达式（可编辑）",
@@ -267,7 +268,7 @@ pub(crate) fn show(
                                 &mut settings.expression,
                                 "例如：a * sin(b * x + c)",
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(SPACE_SM);
                             editable_fit_field(
                                 ui,
                                 "初始参数（可编辑）",
@@ -300,10 +301,10 @@ pub(crate) fn show(
                                 action = FitAction::Clear;
                             }
                         });
-                        ui.add_space(8.0);
+                        ui.add_space(SPACE_SM);
                         ui.label(&settings.message);
                     });
-                    ui.add_space(12.0);
+                    ui.add_space(SPACE_MD);
                 });
         },
     );
@@ -336,15 +337,15 @@ fn editable_fit_field(
     egui::Frame::new()
         .fill(egui::Color32::from_gray(31))
         .stroke(egui::Stroke::new(1.5, accent))
-        .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::same(10))
+        .corner_radius(egui::CornerRadius::same(CONTROL_RADIUS))
+        .inner_margin(egui::Margin::same(SPACE_MD as i8))
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(title)
                     .strong()
                     .color(egui::Color32::from_gray(232)),
             );
-            ui.add_space(4.0);
+            ui.add_space(SPACE_XS);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(prefix).strong());
                 ui.scope(|ui| {
