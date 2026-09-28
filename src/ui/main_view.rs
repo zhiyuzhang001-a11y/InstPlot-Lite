@@ -2,7 +2,7 @@ use eframe::egui;
 
 use super::{
     export_window::DataExportFormat,
-    theme::{SPACE_LG, SPACE_MD, SPACE_XS},
+    theme::{SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS},
 };
 
 pub const STATUS_ROW_HEIGHT: f32 = 22.0;
@@ -117,11 +117,14 @@ pub fn show_wide_sidebar<R>(
     show_data_controls: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (R, SidebarAction) {
     let mut action = SidebarAction::None;
+    let frame = egui::Frame::side_top_panel(ui.style())
+        .inner_margin(egui::Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8));
     let value = egui::Panel::left("data-controls")
         .exact_size(width)
         .resizable(false)
+        .frame(frame)
         .show(ui, |ui| {
-            ui.heading("数据");
+            ui.label(egui::RichText::new("数据").size(18.0).strong());
             ui.separator();
             let value = show_data_controls(ui);
             ui.add_space(SPACE_MD);
@@ -135,9 +138,9 @@ pub fn show_wide_sidebar<R>(
             });
             ui.add_space(SPACE_LG);
             ui.separator();
-            ui.label("左键：点选或框选删除");
-            ui.label("滚轮：缩放");
-            ui.label("右键拖动：平移");
+            ui.weak("左键：点选或框选删除");
+            ui.weak("滚轮：缩放");
+            ui.weak("右键拖动：平移");
             value
         })
         .inner;

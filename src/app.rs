@@ -22,7 +22,7 @@ use crate::{
         self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
     },
     ui::selection::{sole_selected_index, synchronize_selection},
-    ui::theme::configure_interface_style,
+    ui::theme::{SPACE_SM, SPACE_XS, configure_interface_style},
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
     },
@@ -1207,7 +1207,7 @@ impl InstPlotLiteApp {
             };
         if vertical {
             let control_width = (ui.available_width() - 10.0).max(100.0);
-            ui.add_space(8.0);
+            ui.add_space(SPACE_SM);
             ui.label(if linked_fit {
                 "X 列（拟合关联）"
             } else {
@@ -1221,7 +1221,7 @@ impl InstPlotLiteApp {
             } else {
                 column_combo(ui, "x-column", &mut self.x_column, control_width);
             }
-            ui.add_space(6.0);
+            ui.add_space(SPACE_SM);
             ui.label(if linked_fit {
                 "Y 列（拟合关联）"
             } else {
@@ -1273,30 +1273,30 @@ impl InstPlotLiteApp {
         }
         let fit_details = self.active_fit_details();
         if !fit_details.is_empty() {
-            ui.add_space(8.0);
+            ui.add_space(SPACE_SM);
             ui.separator();
             ui.strong("拟合结果");
             egui::Frame::NONE
-                .inner_margin(egui::Margin::symmetric(6, 0))
+                .inner_margin(egui::Margin::symmetric(SPACE_SM as i8, 0))
                 .show(ui, |ui| {
                     for (index, (display_equation, precise_equation, r2)) in
                         fit_details.into_iter().enumerate()
                     {
                         if index > 0 {
-                            ui.add_space(8.0);
+                            ui.add_space(SPACE_SM);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(SPACE_XS);
                         }
                         let (formula, parameters) = split_fit_display_equation(&display_equation);
                         ui.add(egui::Label::new(formula).wrap())
                             .on_hover_text(format!("完整精度：{precise_equation}"));
                         if let Some(parameters) = parameters {
-                            ui.add_space(5.0);
+                            ui.add_space(SPACE_XS);
                             ui.add(egui::Label::new(parameters).wrap())
                                 .on_hover_text(format!("完整精度：{precise_equation}"));
                         }
                         if let Some(r2) = r2 {
-                            ui.add_space(5.0);
+                            ui.add_space(SPACE_XS);
                             ui.label(format!("R² = {r2:.6}"));
                         }
                     }
@@ -1423,12 +1423,12 @@ impl eframe::App for InstPlotLiteApp {
                 SidebarAction::None => {}
             }
             egui::Area::new(egui::Id::new("update-and-version-footer"))
-                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(6.0, -6.0))
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(SPACE_SM, -SPACE_SM))
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::NONE
                         .fill(ui.visuals().panel_fill)
-                        .inner_margin(egui::Margin::symmetric(2, 2))
+                        .inner_margin(egui::Margin::symmetric(SPACE_XS as i8, SPACE_XS as i8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 #[cfg(any(target_os = "windows", test))]
