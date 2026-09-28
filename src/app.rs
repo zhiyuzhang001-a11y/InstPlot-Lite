@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, PointerButton, Rect, Stroke, StrokeKind};
-use egui_plot::{Legend, Line, Plot, PlotMemory, PlotPoint, Points};
+use egui_plot::{Legend, Plot, PlotMemory, PlotPoint};
 
 use crate::{
     data, data_export,
@@ -15,10 +15,11 @@ use crate::{
         self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
     },
     ui::fitting_window::{self, FitAction, FitKind, FitScope, FitSettings, XUnitConversion},
-    ui::formatting::{
-        AxisDisplay, anchor_name, compact_label, legend_series_name, split_fit_display_equation,
-    },
+    ui::formatting::{AxisDisplay, anchor_name, compact_label, split_fit_display_equation},
     ui::main_view::{self, MainAction, SidebarAction},
+    ui::plot_series::{
+        self, PendingHighlight, PlotSeriesInput, plot_coordinate_names, plotted_axis_range,
+    },
     ui::processing_window::{
         self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
     },
@@ -1557,119 +1558,29 @@ impl eframe::App for InstPlotLiteApp {
                         )));
                     }
                 }
-                if self.datasets.is_empty() {
-                    let color = series_color(0);
-                    let series_name = "示例曲线";
-                    let series_id = egui::Id::new("demo-curve-series");
-                    plotted_series_ids.push(series_id);
-                    plot_ui.line(
-                        Line::new(series_name, self.demo_points.clone())
-                            .id(series_id)
-                            .color(color),
-                    );
-                    plot_ui.points(
-                        Points::new(series_name, self.demo_points.clone())
-                            .id(series_id)
-                            .color(color)
-                            .radius(3.5),
-                    );
-                    return;
-                }
-                for (dataset_index, dataset) in self.datasets.iter().enumerate() {
-                    let Some((x_column, y_column)) = dataset_plot_columns(
-                        &self.datasets,
-                        dataset_index,
-                        self.active_dataset,
-                        &plot_x_name,
-                        &plot_y_name,
-                    ) else {
-                        continue;
-                    };
-                    let point_limit = self
-                        .last_plot_rect
-                        .map_or(2_000, |rect| (rect.width() as usize * 2).clamp(512, 20_000));
-                    let points =
-                        dataset.plot_points(x_column, y_column, point_limit, self.visible_x_range);
-                    if !points.is_empty() {
-                        let color = series_color(dataset_index);
-                        let is_active = dataset_index == self.active_dataset;
-                        let series_name = legend_series_name(&dataset.display_name(), is_active);
-                        let series_id = data_curve_series_id(dataset_index, &dataset.plot_id);
-                        plotted_series_ids.push(series_id);
-                        plot_ui.line(
-                            Line::new(series_name.clone(), points.clone())
-                                .id(series_id)
-                                .color(color)
-                                .width(if is_active { 3.0 } else { 1.2 }),
-                        );
-                        plot_ui.points(
-                            Points::new(series_name, points)
-                                .id(series_id)
-                                .color(color)
-                                .radius(if is_active { 4.5 } else { 2.5 }),
-                        );
-                    }
-                    if let Some(pending) = self
-                        .pending_deletion
+                let pending_highlight =
+                    self.pending_deletion
                         .as_ref()
-                        .filter(|pending| pending.dataset_index == dataset_index)
-                    {
-                        let highlighted: Vec<[f64; 2]> = pending
-                            .rows
-                            .iter()
-                            .step_by(pending.rows.len().div_ceil(5_000).max(1))
-                            .filter_map(|row_index| {
-                                let x = dataset
-                                    .columns
-                                    .get(pending.x_column)?
-                                    .values
-                                    .get(*row_index)?;
-                                let y = dataset
-                                    .columns
-                                    .get(pending.y_column)?
-                                    .values
-                                    .get(*row_index)?;
-                                (x.is_finite() && y.is_finite()).then_some([*x, *y])
-                            })
-                            .collect();
-                        plot_ui.points(
-                            Points::new("待删除", highlighted)
-                                .color(Color32::YELLOW)
-                                .radius(5.0),
-                        );
-                    }
-                }
-                for (fit_index, fit) in
-                    self.fit_results
-                        .overlays
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, fit)| {
-                            fit_overlay_matches_coordinates(
-                                fit,
-                                &self.datasets,
-                                &plot_x_name,
-                                &plot_y_name,
-                            )
-                        })
-                {
-                    let is_active = fit.target.dataset_index == Some(self.active_dataset);
-                    let fit_name = legend_series_name(&fit.name, is_active);
-                    let fit_id = egui::Id::new((
-                        "fit-curve-series",
-                        fit.target.dataset_index,
-                        fit.target.source_dataset_ids.as_slice(),
-                        fit.target.x_column_name.as_str(),
-                        fit.target.y_column_name.as_str(),
-                    ));
-                    plotted_series_ids.push(fit_id);
-                    plot_ui.line(
-                        Line::new(fit_name, fit.points.clone())
-                            .id(fit_id)
-                            .color(fit_color(fit_index))
-                            .width(if is_active { 3.5 } else { 1.8 }),
-                    );
-                }
+                        .map(|pending| PendingHighlight {
+                            dataset_index: pending.dataset_index,
+                            rows: &pending.rows,
+                            x_column: pending.x_column,
+                            y_column: pending.y_column,
+                        });
+                plotted_series_ids = plot_series::show(
+                    plot_ui,
+                    PlotSeriesInput {
+                        demo_points: &self.demo_points,
+                        datasets: &self.datasets,
+                        active_dataset: self.active_dataset,
+                        plot_x_name: &plot_x_name,
+                        plot_y_name: &plot_y_name,
+                        last_plot_rect: self.last_plot_rect,
+                        visible_x_range: self.visible_x_range,
+                        pending_highlight,
+                        fit_overlays: &self.fit_results.overlays,
+                    },
+                );
             })
         });
         ui.add_space(PLOT_BOTTOM_GUTTER);
@@ -1810,101 +1721,6 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
 }
 
-fn plot_coordinate_names(
-    datasets: &[data::DataSet],
-    active_dataset: usize,
-    x_column: usize,
-    y_column: usize,
-) -> Option<(String, String)> {
-    let active = datasets.get(active_dataset)?;
-    if active.kind == data::DataSetKind::Fit
-        && let Some(link) = &active.fit_link
-    {
-        return Some((link.source_x_column.clone(), link.source_y_column.clone()));
-    }
-    Some((
-        active.columns.get(x_column)?.name.clone(),
-        active.columns.get(y_column)?.name.clone(),
-    ))
-}
-
-fn dataset_plot_columns(
-    datasets: &[data::DataSet],
-    dataset_index: usize,
-    active_dataset: usize,
-    x_name: &str,
-    y_name: &str,
-) -> Option<(usize, usize)> {
-    let dataset = datasets.get(dataset_index)?;
-    if dataset.kind == data::DataSetKind::Fit
-        && let Some(link) = &dataset.fit_link
-    {
-        if link.source_x_column != x_name || link.source_y_column != y_name {
-            return None;
-        }
-        let parent_is_loaded = link.parent_dataset_id.as_ref().is_none_or(|parent_id| {
-            datasets.iter().any(|candidate| {
-                candidate.kind == data::DataSetKind::Source
-                    && candidate.plot_id == *parent_id
-                    && candidate.columns.iter().any(|column| column.name == x_name)
-                    && candidate.columns.iter().any(|column| column.name == y_name)
-            })
-        });
-        return (dataset_index == active_dataset || parent_is_loaded)
-            .then_some((0, 1))
-            .filter(|(x, y)| {
-                dataset.columns.get(*x).is_some() && dataset.columns.get(*y).is_some()
-            });
-    }
-
-    let x_column = dataset
-        .columns
-        .iter()
-        .position(|column| column.name == x_name)?;
-    let y_column = dataset
-        .columns
-        .iter()
-        .position(|column| column.name == y_name)?;
-    Some((x_column, y_column))
-}
-
-fn plotted_axis_range(
-    datasets: &[data::DataSet],
-    active_dataset: usize,
-    x_name: &str,
-    y_name: &str,
-    axis: usize,
-) -> Option<[f64; 2]> {
-    let mut combined: Option<[f64; 2]> = None;
-    for (dataset_index, dataset) in datasets.iter().enumerate() {
-        let Some((x_column, y_column)) =
-            dataset_plot_columns(datasets, dataset_index, active_dataset, x_name, y_name)
-        else {
-            continue;
-        };
-        let Some(column) = dataset
-            .columns
-            .get(if axis == 0 { x_column } else { y_column })
-        else {
-            continue;
-        };
-        let Some([minimum, maximum]) = finite_range(&column.values) else {
-            continue;
-        };
-        combined = Some(match combined {
-            Some([current_minimum, current_maximum]) => {
-                [current_minimum.min(minimum), current_maximum.max(maximum)]
-            }
-            None => [minimum, maximum],
-        });
-    }
-    combined
-}
-
-fn data_curve_series_id(dataset_index: usize, plot_id: &str) -> egui::Id {
-    egui::Id::new(("data-curve-series", dataset_index, plot_id))
-}
-
 fn reset_plot_bounds_preserving_visibility(context: &egui::Context, plot_id: egui::Id) -> bool {
     let Some(mut memory) = PlotMemory::load(context, plot_id) else {
         return false;
@@ -2025,30 +1841,6 @@ fn demo_curve(point_count: usize) -> Vec<[f64; 2]> {
         .collect()
 }
 
-fn series_color(index: usize) -> Color32 {
-    const COLORS: [Color32; 6] = [
-        Color32::from_rgb(214, 79, 79),
-        Color32::from_rgb(76, 145, 222),
-        Color32::from_rgb(72, 176, 116),
-        Color32::from_rgb(232, 153, 67),
-        Color32::from_rgb(161, 112, 214),
-        Color32::from_rgb(65, 185, 190),
-    ];
-    COLORS[index % COLORS.len()]
-}
-
-fn fit_color(index: usize) -> Color32 {
-    const COLORS: [Color32; 6] = [
-        Color32::from_rgb(255, 196, 64),
-        Color32::from_rgb(246, 126, 188),
-        Color32::from_rgb(143, 220, 220),
-        Color32::from_rgb(184, 153, 255),
-        Color32::from_rgb(255, 160, 94),
-        Color32::from_rgb(166, 223, 105),
-    ];
-    COLORS[index % COLORS.len()]
-}
-
 fn store_fit_overlay(overlays: &mut Vec<FitOverlay>, overlay: FitOverlay) -> bool {
     if let Some(existing) = overlays
         .iter_mut()
@@ -2098,37 +1890,18 @@ fn fit_dataset_indices(
     }
 }
 
-fn fit_overlay_matches_coordinates(
-    fit: &FitOverlay,
-    datasets: &[data::DataSet],
-    x_name: &str,
-    y_name: &str,
-) -> bool {
-    if fit.target.x_column_name == x_name && fit.target.y_column_name == y_name {
-        return true;
-    }
-    let Some(dataset) = fit
-        .target
-        .dataset_index
-        .and_then(|index| datasets.get(index))
-    else {
-        return false;
-    };
-    dataset
-        .fit_link
-        .as_ref()
-        .is_some_and(|link| link.source_x_column == x_name && link.source_y_column == y_name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        FitOverlay, FitScope, FitTarget, data_curve_series_id, dataset_plot_columns, demo_curve,
-        fit_dataset_indices, fit_overlay_matches_coordinates, is_inside_range,
-        plot_coordinate_names, reset_plot_bounds_preserving_visibility, store_fit_overlay,
-        store_fit_overlays, wheel_zoom_factor,
+        FitOverlay, FitScope, FitTarget, demo_curve, fit_dataset_indices, is_inside_range,
+        reset_plot_bounds_preserving_visibility, store_fit_overlay, store_fit_overlays,
+        wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
+    use crate::ui::plot_series::{
+        data_curve_series_id, dataset_plot_columns, fit_overlay_matches_coordinates,
+        plot_coordinate_names,
+    };
     use eframe::egui;
     use egui_plot::{Line, Plot, PlotMemory};
     use std::path::PathBuf;

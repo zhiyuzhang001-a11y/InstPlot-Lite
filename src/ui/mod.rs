@@ -3,6 +3,7 @@ pub(crate) mod export_window;
 pub(crate) mod fitting_window;
 pub(crate) mod formatting;
 pub(crate) mod main_view;
+pub(crate) mod plot_series;
 pub(crate) mod processing_window;
 pub(crate) mod selection;
 pub(crate) mod theme;
