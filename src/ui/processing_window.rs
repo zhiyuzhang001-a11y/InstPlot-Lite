@@ -4,7 +4,7 @@ use crate::processing::Anchor;
 
 use super::{
     formatting::{anchor_name, compact_label},
-    theme::{CONTROL_BG, FG_SECONDARY, SPACE_LG, SPACE_MD, SPACE_SM},
+    theme::{CONTROL_BG, FG_SECONDARY, SPACE_MD, SPACE_SM},
     tool_window::{
         apply_tool_window_surface, processing_viewport_id, show_embedded_window_close_control,
         show_tool_viewport,
@@ -419,9 +419,9 @@ fn section_heading(ui: &mut egui::Ui, title: &str) {
 }
 
 fn begin_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(SPACE_LG);
+    ui.add_space(SPACE_MD);
     ui.separator();
-    ui.add_space(SPACE_SM);
+    ui.add_space(SPACE_SM / 2.0);
     section_heading(ui, title);
 }
 
