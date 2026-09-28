@@ -3,8 +3,8 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 use crate::processing::Anchor;
 
 use super::{
-    formatting::anchor_name,
-    theme::SPACE_MD,
+    formatting::{anchor_name, compact_label},
+    theme::{CONTROL_BG, FG_SECONDARY, SPACE_LG, SPACE_MD, SPACE_SM},
     tool_window::{
         apply_tool_window_surface, processing_viewport_id, show_embedded_window_close_control,
         show_tool_viewport,
@@ -143,9 +143,13 @@ pub(crate) fn show(
                 .scroll_source(egui::scroll_area::ScrollSource::ALL)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_space(SPACE_MD);
-                    ui.indent("processing-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = SPACE_MD;
+                    let available_width = ui.available_width();
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::same(SPACE_MD as i8))
+                        .show(ui, |ui| {
+                        ui.set_min_width((available_width - 2.0 * SPACE_MD).max(0.0));
+                        ui.spacing_mut().item_spacing.y = SPACE_SM;
+                        section_heading(ui, "处理目标");
                         ui.horizontal(|ui| {
                             ui.label("结果写入：");
                             ui.selectable_value(
@@ -159,7 +163,10 @@ pub(crate) fn show(
                                 "保留派生列",
                             );
                         });
-                        ui.small("此设置适用于本窗口全部操作和所有选中曲线；覆盖操作仍可撤销。");
+                        secondary_text(
+                            ui,
+                            "此设置适用于本窗口全部操作和所有选中曲线；覆盖操作仍可撤销。",
+                        );
                         ui.horizontal(|ui| {
                             ui.label("处理范围：");
                             ui.selectable_value(
@@ -176,23 +183,28 @@ pub(crate) fn show(
                         if settings.scope == ProcessingScope::Current {
                             ui.horizontal(|ui| {
                                 ui.label("当前曲线：");
-                                egui::ComboBox::from_id_salt("processing-dataset")
+                                let response = egui::ComboBox::from_id_salt("processing-dataset")
                                     .width(300.0)
                                     .selected_text(
                                         dataset_names
                                             .get(selected_dataset)
-                                            .map(String::as_str)
-                                            .unwrap_or("未选择"),
+                                            .map(|name| compact_label(name, 28))
+                                            .unwrap_or_else(|| "未选择".to_owned()),
                                     )
                                     .show_ui(ui, |ui| {
                                         for (index, name) in dataset_names.iter().enumerate() {
                                             ui.selectable_value(
                                                 &mut selected_dataset,
                                                 index,
-                                                name,
-                                            );
+                                                compact_label(name, 48),
+                                            )
+                                            .on_hover_text(name);
                                         }
-                                    });
+                                    })
+                                    .response;
+                                if let Some(name) = dataset_names.get(selected_dataset) {
+                                    response.on_hover_text(name);
+                                }
                             });
                         } else {
                             ui.horizontal(|ui| {
@@ -204,23 +216,32 @@ pub(crate) fn show(
                                 }
                             });
                             for (index, name) in dataset_names.iter().enumerate() {
-                                ui.checkbox(&mut settings.selected_datasets[index], name);
+                                ui.checkbox(
+                                    &mut settings.selected_datasets[index],
+                                    compact_label(name, 44),
+                                )
+                                .on_hover_text(name);
                             }
                         }
-                        ui.label("结果写入方式由上方全局设置决定；批量处理可一次撤销。");
-                        ui.separator();
+                        secondary_text(
+                            ui,
+                            "结果写入方式由上方全局设置决定；批量处理可一次撤销。",
+                        );
+                        begin_section(ui, "基础处理");
                         ui.horizontal(|ui| {
-                            if ui.button("对称处理").clicked() {
+                            if ui.add(action_button("对称处理")).clicked() {
                                 requested = Some(ProcessingAction::Center);
                             }
-                            if ui.button("归一化").clicked() {
+                            if ui.add(action_button("归一化")).clicked() {
                                 requested = Some(ProcessingAction::CenterNormalize);
                             }
-                            ui.small("归一化沿用原版：先对称，再取最高 20 个有限值的均值");
                         });
+                        secondary_text(
+                            ui,
+                            "归一化沿用原版：先对称，再取最高 20 个有限值的均值。",
+                        );
 
-                        ui.separator();
-                        ui.strong("去背底（多项式）");
+                        begin_section(ui, "去背底（多项式）");
                         ui.horizontal(|ui| {
                             ui.label("拟合 X：");
                             ui.add(egui::DragValue::new(&mut settings.fit_min));
@@ -230,7 +251,7 @@ pub(crate) fn show(
                             ui.add(
                                 egui::DragValue::new(&mut settings.background_order).range(0..=5),
                             );
-                            if ui.button(egui::RichText::new("执行").strong()).clicked() {
+                            if ui.add(action_button("执行")).clicked() {
                                 requested = Some(ProcessingAction::PolynomialBackground {
                                     fit_min: settings.fit_min,
                                     fit_max: settings.fit_max,
@@ -239,13 +260,10 @@ pub(crate) fn show(
                             }
                         });
 
-                        ui.separator();
-                        ui.strong("局部展平");
-                        ui.label(
-                            egui::RichText::new(
-                                "去除指定 X 区间的线性倾斜，使该段接近水平；锚点位置保持不变。",
-                            )
-                            .weak(),
+                        begin_section(ui, "局部展平");
+                        secondary_text(
+                            ui,
+                            "去除指定 X 区间的线性倾斜，使该段接近水平；锚点位置保持不变。",
                         );
                         ui.horizontal(|ui| {
                             ui.label("X：");
@@ -281,7 +299,7 @@ pub(crate) fn show(
                                     .show_value(true),
                             );
                             if ui
-                                .button(egui::RichText::new("执行").strong())
+                                .add(action_button("执行"))
                                 .on_hover_text("按上方结果写入方式应用局部展平")
                                 .clicked()
                             {
@@ -295,8 +313,7 @@ pub(crate) fn show(
                             }
                         });
 
-                        ui.separator();
-                        ui.strong("Savitzky–Golay 去噪");
+                        begin_section(ui, "Savitzky–Golay 去噪");
                         ui.horizontal(|ui| {
                             ui.label("窗口");
                             ui.add(
@@ -318,9 +335,7 @@ pub(crate) fn show(
                                 ui.add(egui::DragValue::new(&mut settings.denoise_max));
                             });
                         }
-                        if ui
-                            .button(egui::RichText::new("执行去噪").strong())
-                            .clicked()
+                        if ui.add(action_button("执行去噪")).clicked()
                         {
                             requested = Some(ProcessingAction::Denoise {
                                 window_length: settings.denoise_window,
@@ -331,13 +346,10 @@ pub(crate) fn show(
                             });
                         }
 
-                        ui.separator();
-                        ui.strong("公式计算");
-                        ui.label(
-                            egui::RichText::new(
-                                "按行计算：含 x 的公式生成新 X 列，含 y 的公式生成新 Y 列；a、b 是下方参数。",
-                            )
-                            .weak(),
+                        begin_section(ui, "公式计算");
+                        secondary_text(
+                            ui,
+                            "按行计算：含 x 的公式生成新 X 列，含 y 的公式生成新 Y 列；a、b 是下方参数。",
                         );
                         ui.horizontal_wrapped(|ui| {
                             for (label, formula) in [
@@ -373,7 +385,7 @@ pub(crate) fn show(
                                     .hint_text("例如：(2+3)/7"),
                             );
                             if ui
-                                .button(egui::RichText::new("执行公式").strong())
+                                .add(action_button("执行公式"))
                                 .on_hover_text(
                                     "根据公式中的 x 或 y，按上方结果写入方式应用公式",
                                 )
@@ -386,11 +398,11 @@ pub(crate) fn show(
                                 });
                             }
                         });
-                        ui.small(
+                        secondary_text(
+                            ui,
                             "公式和系数支持 + − × ÷ ^、括号、sin、cos、tan、exp、ln/log、sqrt、abs、arctan，以及 pi、e。",
                         );
                     });
-                    ui.add_space(SPACE_MD);
                 });
         },
     );
@@ -400,4 +412,25 @@ pub(crate) fn show(
         active_dataset: selected_dataset,
         action: requested,
     }
+}
+
+fn section_heading(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).strong());
+}
+
+fn begin_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(SPACE_LG);
+    ui.separator();
+    ui.add_space(SPACE_SM);
+    section_heading(ui, title);
+}
+
+fn secondary_text(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).color(FG_SECONDARY));
+}
+
+fn action_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(label).strong())
+        .fill(CONTROL_BG)
+        .stroke(egui::Stroke::NONE)
 }
