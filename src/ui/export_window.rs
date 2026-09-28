@@ -3,7 +3,7 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 use super::{
     formatting::compact_label,
     selection::sole_selected_index,
-    theme::SPACE_SM,
+    theme::{FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD, SPACE_SM},
     tool_window::{
         apply_tool_window_surface, export_viewport_id, show_embedded_window_close_control,
         show_tool_viewport,
@@ -104,133 +104,173 @@ pub(crate) fn show(
             if show_embedded_window_close_control(ui, viewport_class, &mut open) {
                 return;
             }
-            egui::ScrollArea::vertical()
-                .id_salt("export-window-scroll")
-                .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
-                .scroll_source(egui::scroll_area::ScrollSource::ALL)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add_space(SPACE_SM);
-                    ui.indent("export-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = SPACE_SM;
-                        ui.label("选择要导出的数据集或曲线。");
-                        ui.small("实时拟合结果会随其关联数据集一起导出。");
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button("当前").clicked() {
-                                settings.datasets.fill(false);
-                                if let Some(value) = settings.datasets.get_mut(data.active_dataset)
-                                {
-                                    *value = true;
-                                }
-                            }
-                            if ui.button("全选").clicked() {
-                                settings.datasets.fill(true);
-                            }
-                            if ui.button("全不选").clicked() {
-                                settings.datasets.fill(false);
-                            }
+            let body_height = (ui.available_height() - 54.0).max(120.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), body_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("export-window-scroll")
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                        .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Frame::NONE
+                                .inner_margin(egui::Margin::same(SPACE_MD as i8))
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.y = SPACE_SM;
+                                    section_heading(ui, "1  选择数据");
+                                    ui.label(
+                                        egui::RichText::new("选择要导出的数据集或曲线。")
+                                            .color(FG_SECONDARY),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "实时拟合结果会随其关联数据集一起导出。",
+                                        )
+                                        .color(FG_SECONDARY),
+                                    );
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.button("当前").clicked() {
+                                            settings.datasets.fill(false);
+                                            if let Some(value) =
+                                                settings.datasets.get_mut(data.active_dataset)
+                                            {
+                                                *value = true;
+                                            }
+                                        }
+                                        if ui.button("全选").clicked() {
+                                            settings.datasets.fill(true);
+                                        }
+                                        if ui.button("全不选").clicked() {
+                                            settings.datasets.fill(false);
+                                        }
+                                    });
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("export-dataset-list-scroll")
+                                        .max_height(150.0)
+                                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                                        .auto_shrink([false, true])
+                                        .show(ui, |ui| {
+                                            for (index, name) in
+                                                data.dataset_names.iter().enumerate()
+                                            {
+                                                if let Some(selected) =
+                                                    settings.datasets.get_mut(index)
+                                                {
+                                                    let marker = if index == data.active_dataset {
+                                                        "▶ "
+                                                    } else {
+                                                        ""
+                                                    };
+                                                    ui.checkbox(
+                                                        selected,
+                                                        format!(
+                                                            "{marker}{}",
+                                                            compact_label(name, 38)
+                                                        ),
+                                                    )
+                                                    .on_hover_text(name);
+                                                }
+                                            }
+                                        });
+
+                                    let selected_count = selected_dataset_count(settings);
+                                    if selected_count > 1 {
+                                        ui.add_space(SPACE_LG);
+                                        section_heading(ui, "2  保存方式");
+                                        ui.radio_value(
+                                            &mut settings.layout,
+                                            ExportLayout::Combined,
+                                            if settings.format == DataExportFormat::Xlsx {
+                                                "同一个工作簿（每个数据集一个工作表）"
+                                            } else {
+                                                "同一个分区文件（BEGIN/END）"
+                                            },
+                                        );
+                                        ui.radio_value(
+                                            &mut settings.layout,
+                                            ExportLayout::Separate,
+                                            "多个独立文件",
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "多数据集导出会保留各自全部列和相关拟合结果。",
+                                            )
+                                            .color(FG_SECONDARY),
+                                        );
+                                    }
+
+                                    if sole_selected_index(&settings.datasets).is_some() {
+                                        ui.add_space(SPACE_LG);
+                                        section_heading(ui, "2  选择列");
+                                        ui.horizontal(|ui| {
+                                            if ui.button("全选列").clicked() {
+                                                settings.columns.fill(true);
+                                            }
+                                            if ui.button("全不选列").clicked() {
+                                                settings.columns.fill(false);
+                                            }
+                                        });
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("export-column-list-scroll")
+                                            .max_height(180.0)
+                                            .scroll_bar_visibility(
+                                                ScrollBarVisibility::AlwaysVisible,
+                                            )
+                                            .auto_shrink([false, true])
+                                            .show(ui, |ui| {
+                                                for (index, name) in
+                                                    data.column_names.iter().enumerate()
+                                                {
+                                                    if let Some(selected) =
+                                                        settings.columns.get_mut(index)
+                                                    {
+                                                        ui.checkbox(
+                                                            selected,
+                                                            format!("{}：{name}", index + 1),
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                    }
+                                });
                         });
-                        for (index, name) in data.dataset_names.iter().enumerate() {
-                            if let Some(selected) = settings.datasets.get_mut(index) {
-                                let marker = if index == data.active_dataset {
-                                    "▶ "
-                                } else {
-                                    ""
-                                };
-                                ui.checkbox(
-                                    selected,
-                                    format!("{marker}{}", compact_label(name, 38)),
-                                )
-                                .on_hover_text(name);
-                            }
-                        }
+                },
+            );
 
-                        let selected_count = settings
-                            .datasets
-                            .iter()
-                            .filter(|selected| **selected)
-                            .count();
-                        if selected_count > 1 {
-                            ui.separator();
-                            ui.label("保存方式");
-                            ui.radio_value(
-                                &mut settings.layout,
-                                ExportLayout::Combined,
-                                if settings.format == DataExportFormat::Xlsx {
-                                    "同一个工作簿（每个数据集一个工作表）"
-                                } else {
-                                    "同一个分区文件（BEGIN/END）"
-                                },
-                            );
-                            ui.radio_value(
-                                &mut settings.layout,
-                                ExportLayout::Separate,
-                                "多个独立文件",
-                            );
-                            ui.small("多数据集导出会保留各自全部列和相关拟合结果。");
-                        }
-
-                        let sole = sole_selected_index(&settings.datasets);
-                        if let Some(dataset_index) = sole {
-                            ui.separator();
-                            ui.label("选择列");
-                            ui.horizontal(|ui| {
-                                if ui.button("全选列").clicked() {
-                                    settings.columns.fill(true);
-                                }
-                                if ui.button("全不选列").clicked() {
-                                    settings.columns.fill(false);
-                                }
-                            });
-                            for (index, name) in data.column_names.iter().enumerate() {
-                                if let Some(selected) = settings.columns.get_mut(index) {
-                                    ui.checkbox(selected, format!("{}：{name}", index + 1));
-                                }
-                            }
-                            let selected_columns = settings
-                                .columns
-                                .iter()
-                                .filter(|selected| **selected)
-                                .count();
-                            let minimum = data
-                                .minimum_columns
-                                .get(dataset_index)
-                                .copied()
-                                .unwrap_or(1);
-                            ui.horizontal(|ui| {
-                                ui.label(format!("已选 {selected_columns} 列"));
-                                if ui
-                                    .add_enabled(
-                                        selected_columns >= minimum,
-                                        egui::Button::new("导出"),
-                                    )
-                                    .on_disabled_hover_text(if minimum == 2 {
-                                        "该数据包含拟合结果，至少选择两列才能重新导入"
-                                    } else {
-                                        "请至少选择一列"
-                                    })
-                                    .clicked()
-                                {
-                                    export = true;
-                                }
-                            });
-                        } else {
-                            ui.separator();
+            let selected_count = selected_dataset_count(settings);
+            let sole = sole_selected_index(&settings.datasets);
+            let selected_columns = settings
+                .columns
+                .iter()
+                .filter(|selected| **selected)
+                .count();
+            let minimum = sole
+                .and_then(|index| data.minimum_columns.get(index).copied())
+                .unwrap_or(1);
+            let can_export = sole.map_or(selected_count > 0, |_| selected_columns >= minimum);
+            let summary = if sole.is_some() {
+                format!("已选 {selected_columns} 列")
+            } else {
+                format!("已选 {selected_count} 个数据集")
+            };
+            egui::Frame::NONE
+                .fill(PANEL_BG)
+                .inner_margin(egui::Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(summary).color(FG_SECONDARY));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .add_enabled(
-                                    selected_count > 0,
-                                    egui::Button::new(format!(
-                                        "导出已选 {selected_count} 个数据集"
-                                    )),
-                                )
-                                .on_disabled_hover_text("请至少选择一个数据集")
+                                .add_enabled(can_export, primary_export_button())
+                                .on_disabled_hover_text(export_disabled_reason(sole, minimum))
                                 .clicked()
                             {
                                 export = true;
                             }
-                        }
+                        });
                     });
-                    ui.add_space(SPACE_SM);
                 });
         },
     );
@@ -241,5 +281,33 @@ pub(crate) fn show(
         ExportAction::Close
     } else {
         ExportAction::None
+    }
+}
+
+fn section_heading(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).strong());
+}
+
+fn selected_dataset_count(settings: &ExportSelection) -> usize {
+    settings
+        .datasets
+        .iter()
+        .filter(|selected| **selected)
+        .count()
+}
+
+fn primary_export_button() -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new("导出").strong().color(SHELL_BG))
+        .fill(FG_PRIMARY)
+        .stroke(egui::Stroke::NONE)
+}
+
+fn export_disabled_reason(sole: Option<usize>, minimum: usize) -> &'static str {
+    if sole.is_none() {
+        "请至少选择一个数据集"
+    } else if minimum == 2 {
+        "该数据包含拟合结果，至少选择两列才能重新导入"
+    } else {
+        "请至少选择一列"
     }
 }
