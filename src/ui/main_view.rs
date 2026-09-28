@@ -3,8 +3,8 @@ use eframe::egui;
 use super::{
     export_window::DataExportFormat,
     theme::{
-        FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS,
-        shell_scope,
+        CONTROL_BG, FG_DANGER, FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD,
+        SPACE_SM, SPACE_XS, shell_scope,
     },
 };
 
@@ -195,23 +195,26 @@ pub fn show_wide_sidebar<R>(
         .frame(frame)
         .show(ui, |ui| {
             shell_scope(ui, |ui| {
-                ui.label(egui::RichText::new("数据").size(18.0).strong());
+                ui.label(egui::RichText::new("数据").size(17.0).strong());
+                ui.add_space(SPACE_XS);
                 ui.separator();
+                ui.add_space(SPACE_SM);
                 let value = show_data_controls(ui);
-                ui.add_space(SPACE_MD);
+                ui.add_space(SPACE_LG);
                 ui.horizontal(|ui| {
-                    if ui.button("复位视图").clicked() {
+                    if ui.add(sidebar_button("复位视图")).clicked() {
                         action = SidebarAction::ResetView;
                     }
-                    if ui.button("清空").clicked() {
+                    if ui.add(clear_button("清空")).clicked() {
                         action = SidebarAction::Clear;
                     }
                 });
                 ui.add_space(SPACE_LG);
                 ui.separator();
-                ui.weak("左键：点选或框选删除");
-                ui.weak("滚轮：缩放");
-                ui.weak("右键拖动：平移");
+                ui.add_space(SPACE_SM);
+                ui.label(egui::RichText::new("左键：点选或框选删除").color(FG_SECONDARY));
+                ui.label(egui::RichText::new("滚轮：缩放").color(FG_SECONDARY));
+                ui.label(egui::RichText::new("右键拖动：平移").color(FG_SECONDARY));
                 value
             })
         })
@@ -223,17 +226,47 @@ pub fn show_narrow_controls<R>(
     ui: &mut egui::Ui,
     show_data_controls: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (R, SidebarAction) {
-    let value = show_data_controls(ui);
     let mut action = SidebarAction::None;
+    let value = show_data_controls(ui);
+    ui.add_space(SPACE_SM);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("复位视图").clicked() {
+        if ui.add(sidebar_button("复位视图")).clicked() {
             action = SidebarAction::ResetView;
         }
-        if ui.button("清空").clicked() {
+        if ui.add(clear_button("清空")).clicked() {
             action = SidebarAction::Clear;
         }
     });
     (value, action)
+}
+
+pub fn show_narrow_data_region<R>(
+    ui: &mut egui::Ui,
+    show_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let available_width = ui.available_width();
+    egui::Frame::NONE
+        .fill(PANEL_BG)
+        .inner_margin(egui::Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8))
+        .show(ui, |ui| {
+            shell_scope(ui, |ui| {
+                ui.set_min_width((available_width - 2.0 * SPACE_MD).max(0.0));
+                show_contents(ui)
+            })
+        })
+        .inner
+}
+
+fn sidebar_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(label)
+        .fill(CONTROL_BG)
+        .stroke(egui::Stroke::NONE)
+}
+
+fn clear_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(label).color(FG_DANGER))
+        .fill(PANEL_BG)
+        .stroke(egui::Stroke::NONE)
 }
 
 pub fn show_status(ui: &mut egui::Ui, status: &str, coordinate: Option<[f64; 2]>) {

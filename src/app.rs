@@ -1137,14 +1137,14 @@ impl InstPlotLiteApp {
         let dataset_combo = |ui: &mut egui::Ui, app: &mut Self| {
             let response = egui::ComboBox::from_id_salt("active-dataset")
                 .width(if vertical {
-                    (ui.available_width() - 10.0).max(100.0)
+                    ui.available_width().max(100.0)
                 } else {
                     150.0
                 })
                 .selected_text(
                     dataset_names
                         .get(app.active_dataset)
-                        .map(|name| format!("当前：{}", compact_label(name, 28)))
+                        .map(|name| format!("当前：{}", compact_label(name, 9)))
                         .unwrap_or_else(|| "未选择".to_owned()),
                 )
                 .show_ui(ui, |ui| {
@@ -1191,7 +1191,7 @@ impl InstPlotLiteApp {
         let previous_columns = (self.x_column, self.y_column);
         let column_combo =
             |ui: &mut egui::Ui, id: &'static str, selected: &mut usize, width: f32| {
-                egui::ComboBox::from_id_salt(id)
+                let response = egui::ComboBox::from_id_salt(id)
                     .width(width)
                     .selected_text(
                         column_names
@@ -1203,10 +1203,14 @@ impl InstPlotLiteApp {
                         for (index, name) in column_names.iter().enumerate() {
                             ui.selectable_value(selected, index, name);
                         }
-                    });
+                    })
+                    .response;
+                if let Some(name) = column_names.get(*selected) {
+                    response.on_hover_text(name);
+                }
             };
         if vertical {
-            let control_width = (ui.available_width() - 10.0).max(100.0);
+            let control_width = ui.available_width().max(100.0);
             ui.add_space(SPACE_SM);
             ui.label(if linked_fit {
                 "X 列（拟合关联）"
@@ -1444,8 +1448,22 @@ impl eframe::App for InstPlotLiteApp {
                 });
             names
         } else {
-            let (names, sidebar_action) =
-                main_view::show_narrow_controls(ui, |ui| self.show_data_controls(ui, false));
+            let (names, sidebar_action) = main_view::show_narrow_data_region(ui, |ui| {
+                let result =
+                    main_view::show_narrow_controls(ui, |ui| self.show_data_controls(ui, false));
+                ui.add_space(SPACE_XS);
+                ui.horizontal(|ui| {
+                    #[cfg(any(target_os = "windows", test))]
+                    self.windows_updater.show_toolbar(ui);
+                    #[cfg(not(any(target_os = "windows", test)))]
+                    ui.label(
+                        egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                            .small()
+                            .weak(),
+                    );
+                });
+                result
+            });
             match sidebar_action {
                 SidebarAction::ResetView => {
                     self.reset_view = true;
@@ -1454,16 +1472,6 @@ impl eframe::App for InstPlotLiteApp {
                 SidebarAction::Clear => self.clear_data(),
                 SidebarAction::None => {}
             }
-            ui.horizontal(|ui| {
-                #[cfg(any(target_os = "windows", test))]
-                self.windows_updater.show_toolbar(ui);
-                #[cfg(not(any(target_os = "windows", test)))]
-                ui.label(
-                    egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                        .small()
-                        .weak(),
-                );
-            });
             ui.separator();
             names
         };
