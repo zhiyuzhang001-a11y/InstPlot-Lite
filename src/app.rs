@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use eframe::egui::{
-    self, Color32, PointerButton, Rect, Stroke, StrokeKind,
-    containers::scroll_area::{ScrollBarVisibility, ScrollSource},
-};
+use eframe::egui::{self, Color32, PointerButton, Rect, Stroke, StrokeKind};
 use egui_plot::{Legend, Line, Plot, PlotMemory, PlotPoint, Points};
 
 use crate::{
@@ -12,9 +9,11 @@ use crate::{
     fitting::{self, FitMethod},
     fonts, image_export,
     processing::{self, ProcessingMetadata, ProcessingOperation},
+    session::{FitOverlay, FitResultState, FitTarget},
     ui::export_window::{
         self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
     },
+    ui::fitting_window::{self, FitAction, FitKind, FitScope, FitSettings, XUnitConversion},
     ui::formatting::{
         AxisDisplay, anchor_name, compact_label, legend_series_name, split_fit_display_equation,
     },
@@ -24,7 +23,6 @@ use crate::{
     ui::selection::{sole_selected_index, synchronize_selection},
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
-        show_embedded_window_close_control, show_tool_viewport,
     },
 };
 
@@ -39,101 +37,6 @@ struct PendingDeletion {
     rows: Vec<usize>,
     x_column: usize,
     y_column: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FitKind {
-    Polynomial,
-    Exponential,
-    Logarithmic,
-    Power,
-    Custom,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum XUnitConversion {
-    None,
-    DegreesToRadians,
-    RadiansToDegrees,
-}
-
-impl XUnitConversion {
-    fn convert(self, value: f64) -> f64 {
-        match self {
-            Self::None => value,
-            Self::DegreesToRadians => value.to_radians(),
-            Self::RadiansToDegrees => value.to_degrees(),
-        }
-    }
-
-    fn restore(self, value: f64) -> f64 {
-        match self {
-            Self::None => value,
-            Self::DegreesToRadians => value.to_degrees(),
-            Self::RadiansToDegrees => value.to_radians(),
-        }
-    }
-}
-
-struct FitSettings {
-    scope: FitScope,
-    selected_datasets: Vec<bool>,
-    kind: FitKind,
-    degree: usize,
-    use_x_range: bool,
-    x_min: f64,
-    x_max: f64,
-    use_y_range: bool,
-    y_min: f64,
-    y_max: f64,
-    unit_conversion: XUnitConversion,
-    expression: String,
-    initial_parameters: String,
-    message: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FitScope {
-    Current,
-    Selected,
-}
-
-impl Default for FitSettings {
-    fn default() -> Self {
-        Self {
-            scope: FitScope::Current,
-            selected_datasets: Vec::new(),
-            kind: FitKind::Polynomial,
-            degree: 2,
-            use_x_range: false,
-            x_min: 0.0,
-            x_max: 1.0,
-            use_y_range: false,
-            y_min: 0.0,
-            y_max: 1.0,
-            unit_conversion: XUnitConversion::None,
-            expression: "a * sin(b * x + c)".to_owned(),
-            initial_parameters: "1, 1, 0".to_owned(),
-            message: "设置参数后执行拟合；拟合曲线会直接显示在主图中。".to_owned(),
-        }
-    }
-}
-
-struct FitOverlay {
-    points: Vec<[f64; 2]>,
-    r2: f64,
-    equation: String,
-    display_equation: String,
-    name: String,
-    target: FitTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FitTarget {
-    dataset_index: Option<usize>,
-    source_dataset_ids: Vec<String>,
-    x_column_name: String,
-    y_column_name: String,
 }
 
 pub struct InstPlotLiteApp {
@@ -158,7 +61,7 @@ pub struct InstPlotLiteApp {
     export_selection: Option<ExportSelection>,
     fit_open: bool,
     fit_settings: FitSettings,
-    fit_overlays: Vec<FitOverlay>,
+    fit_results: FitResultState,
     selected_coordinate: Option<[f64; 2]>,
     status: String,
     #[cfg(any(target_os = "windows", test))]
@@ -195,7 +98,7 @@ impl InstPlotLiteApp {
             export_selection: None,
             fit_open: false,
             fit_settings: FitSettings::default(),
-            fit_overlays: Vec::new(),
+            fit_results: FitResultState::default(),
             selected_coordinate: None,
             status: "打开或拖入数据：TXT、CSV、DAT、TSV、XLSX、XLS".to_owned(),
             #[cfg(any(target_os = "windows", test))]
@@ -479,7 +382,8 @@ impl InstPlotLiteApp {
             return;
         };
         let fits = self
-            .fit_overlays
+            .fit_results
+            .overlays
             .iter()
             .filter(|fit| self.fit_is_fully_selected(fit, &indices))
             .map(|fit| data_export::FitCurveExport {
@@ -518,7 +422,8 @@ impl InstPlotLiteApp {
         let Some(dataset) = self.datasets.get(dataset_index) else {
             return Vec::new();
         };
-        self.fit_overlays
+        self.fit_results
+            .overlays
             .iter()
             .filter(|fit| {
                 fit.target.source_dataset_ids.len() == 1
@@ -552,7 +457,8 @@ impl InstPlotLiteApp {
         layout: ExportLayout,
     ) -> Result<(), String> {
         for fit in self
-            .fit_overlays
+            .fit_results
+            .overlays
             .iter()
             .filter(|fit| fit.target.source_dataset_ids.len() > 1)
         {
@@ -1215,7 +1121,8 @@ impl InstPlotLiteApp {
         }
 
         let fitted_count = pending.len();
-        let (added_count, updated_count) = store_fit_overlays(&mut self.fit_overlays, pending);
+        let (added_count, updated_count) =
+            store_fit_overlays(&mut self.fit_results.overlays, pending);
         self.fit_settings.message = if fitted_count == 1 {
             format!("拟合方程与结果：\n{}", summaries[0])
         } else {
@@ -1226,7 +1133,7 @@ impl InstPlotLiteApp {
         };
         self.status = format!(
             "拟合完成：分别处理 {fitted_count} 条曲线，新增 {added_count} 条、更新 {updated_count} 条；当前保留 {} 条拟合曲线",
-            self.fit_overlays.len()
+            self.fit_results.overlays.len()
         );
     }
 
@@ -1234,233 +1141,36 @@ impl InstPlotLiteApp {
         if !self.fit_open {
             return;
         }
-        let mut open = true;
-        let mut execute = false;
-        let mut clear = false;
-        let viewport_id = fitting_viewport_id();
-        show_tool_viewport(
+        let dataset_names = self
+            .datasets
+            .iter()
+            .map(data::DataSet::display_name)
+            .collect::<Vec<_>>();
+        let response = fitting_window::show(
             context,
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("InstPlot Lite · 曲线拟合")
-                .with_inner_size([620.0, 520.0])
-                .with_min_inner_size([560.0, 470.0])
-                .with_resizable(true),
-            |ui, viewport_class| {
-                if ui.ctx().input(|input| input.viewport().close_requested()) {
-                    open = false;
-                    return;
-                }
-                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("fitting-window-scroll")
-                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
-                    .scroll_source(ScrollSource::ALL)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add_space(12.0);
-                        ui.indent("fit-content", |ui| {
-                            ui.spacing_mut().item_spacing.y = 10.0;
-                            ui.label("使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。");
-                            ui.separator();
-                            ui.small(
-                                "同一数据集的同一组 X/Y 重新拟合时，会更新原拟合曲线；其他曲线的拟合结果会保留。",
-                            );
-                            let dataset_names: Vec<String> = self
-                                .datasets
-                                .iter()
-                                .map(data::DataSet::display_name)
-                                .collect();
-                            ui.horizontal(|ui| {
-                                ui.label("拟合范围：");
-                                ui.selectable_value(
-                                    &mut self.fit_settings.scope,
-                                    FitScope::Current,
-                                    "当前曲线",
-                                );
-                                ui.selectable_value(
-                                    &mut self.fit_settings.scope,
-                                    FitScope::Selected,
-                                    "选择曲线",
-                                );
-                            });
-                            if self.fit_settings.selected_datasets.len() != dataset_names.len() {
-                                self.fit_settings.selected_datasets = (0..dataset_names.len())
-                                    .map(|index| index == self.active_dataset)
-                                    .collect();
-                            }
-                            if self.fit_settings.scope == FitScope::Current {
-                                let previous_dataset = self.active_dataset;
-                                ui.horizontal(|ui| {
-                                    ui.label("当前曲线：");
-                                    egui::ComboBox::from_id_salt("fit-dataset")
-                                        .width(300.0)
-                                        .selected_text(
-                                            dataset_names
-                                                .get(self.active_dataset)
-                                                .map(String::as_str)
-                                                .unwrap_or("未选择"),
-                                        )
-                                        .show_ui(ui, |ui| {
-                                            for (index, name) in dataset_names.iter().enumerate() {
-                                                ui.selectable_value(
-                                                    &mut self.active_dataset,
-                                                    index,
-                                                    name,
-                                                );
-                                            }
-                                        });
-                                });
-                                if self.active_dataset != previous_dataset {
-                                    self.clamp_columns();
-                                    self.reset_after_coordinate_change();
-                                    self.refresh_fit_defaults_from_active_dataset();
-                                }
-                            } else {
-                                ui.horizontal(|ui| {
-                                    if ui.button("全选").clicked() {
-                                        self.fit_settings.selected_datasets.fill(true);
-                                    }
-                                    if ui.button("全不选").clicked() {
-                                        self.fit_settings.selected_datasets.fill(false);
-                                    }
-                                });
-                                for (index, name) in dataset_names.iter().enumerate() {
-                                    ui.checkbox(
-                                        &mut self.fit_settings.selected_datasets[index],
-                                        name,
-                                    );
-                                }
-                                ui.small("所选曲线将分别拟合，不会合并数据点；使用当前 X/Y 列名匹配其他曲线。");
-                            }
-                            ui.horizontal(|ui| {
-                                ui.label("X 单位");
-                                egui::ComboBox::from_id_salt("fit-unit")
-                                    .selected_text(unit_conversion_name(
-                                        self.fit_settings.unit_conversion,
-                                    ))
-                                    .show_ui(ui, |ui| {
-                                        for conversion in [
-                                            XUnitConversion::None,
-                                            XUnitConversion::DegreesToRadians,
-                                            XUnitConversion::RadiansToDegrees,
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut self.fit_settings.unit_conversion,
-                                                conversion,
-                                                unit_conversion_name(conversion),
-                                            );
-                                        }
-                                    });
-                            });
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut self.fit_settings.use_x_range, "限制 X");
-                                ui.add_enabled(
-                                    self.fit_settings.use_x_range,
-                                    egui::DragValue::new(&mut self.fit_settings.x_min),
-                                );
-                                ui.label("至");
-                                ui.add_enabled(
-                                    self.fit_settings.use_x_range,
-                                    egui::DragValue::new(&mut self.fit_settings.x_max),
-                                );
-                                ui.checkbox(&mut self.fit_settings.use_y_range, "限制 Y");
-                                ui.add_enabled(
-                                    self.fit_settings.use_y_range,
-                                    egui::DragValue::new(&mut self.fit_settings.y_min),
-                                );
-                                ui.label("至");
-                                ui.add_enabled(
-                                    self.fit_settings.use_y_range,
-                                    egui::DragValue::new(&mut self.fit_settings.y_max),
-                                );
-                            });
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                ui.label("拟合类型");
-                                egui::ComboBox::from_id_salt("fit-kind")
-                                    .selected_text(fit_kind_name(self.fit_settings.kind))
-                                    .show_ui(ui, |ui| {
-                                        for kind in [
-                                            FitKind::Polynomial,
-                                            FitKind::Exponential,
-                                            FitKind::Logarithmic,
-                                            FitKind::Power,
-                                            FitKind::Custom,
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut self.fit_settings.kind,
-                                                kind,
-                                                fit_kind_name(kind),
-                                            );
-                                        }
-                                    });
-                                if self.fit_settings.kind == FitKind::Polynomial {
-                                    ui.label("阶数");
-                                    ui.add(
-                                        egui::DragValue::new(&mut self.fit_settings.degree)
-                                            .range(1..=10),
-                                    );
-                                }
-                            });
-                            if self.fit_settings.kind == FitKind::Custom {
-                                ui.add_space(6.0);
-                                editable_fit_field(
-                                    ui,
-                                    "函数表达式（可编辑）",
-                                    "f(x) =",
-                                    &mut self.fit_settings.expression,
-                                    "例如：a * sin(b * x + c)",
-                                );
-                                ui.add_space(8.0);
-                                editable_fit_field(
-                                    ui,
-                                    "初始参数（可编辑）",
-                                    "a, b, c… =",
-                                    &mut self.fit_settings.initial_parameters,
-                                    "例如：1, 10/11, (2+3)/7",
-                                );
-                                ui.small(
-                                "参数按 a、b、c、d、e_param、f、g、h 的顺序填写，用逗号分隔；每项可用分数和括号。",
-                                );
-                                ui.small("支持 + - * / ^、sin、cos、tan、exp、ln/log、sqrt、abs。");
-                            }
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button(egui::RichText::new("执行拟合").strong())
-                                    .clicked()
-                                {
-                                    execute = true;
-                                }
-                                if ui
-                                    .add_enabled(
-                                        !self.fit_overlays.is_empty(),
-                                        egui::Button::new("清除全部拟合曲线"),
-                                    )
-                                    .clicked()
-                                {
-                                    clear = true;
-                                }
-                            });
-                            ui.add_space(8.0);
-                            ui.label(&self.fit_settings.message);
-                        });
-                        ui.add_space(12.0);
-                    });
-            },
+            &mut self.fit_settings,
+            &dataset_names,
+            self.active_dataset,
+            !self.fit_results.overlays.is_empty(),
         );
-        self.fit_open = open;
-        if execute {
-            self.execute_fit();
-            context.request_repaint();
+        if response.active_dataset != self.active_dataset {
+            self.active_dataset = response.active_dataset;
+            self.clamp_columns();
+            self.reset_after_coordinate_change();
+            self.refresh_fit_defaults_from_active_dataset();
         }
-        if clear {
-            self.fit_overlays.clear();
-            self.fit_settings.message = "已清除全部拟合曲线。".to_owned();
-            self.status = "已清除全部拟合曲线".to_owned();
+        self.fit_open = response.open;
+        match response.action {
+            FitAction::Execute => {
+                self.execute_fit();
+                context.request_repaint();
+            }
+            FitAction::Clear => {
+                self.fit_results.overlays.clear();
+                self.fit_settings.message = "已清除全部拟合曲线。".to_owned();
+                self.status = "已清除全部拟合曲线".to_owned();
+            }
+            FitAction::None => {}
         }
     }
 
@@ -1538,7 +1248,7 @@ impl InstPlotLiteApp {
             .columns
             .get(self.y_column)
             .map(|column| &column.name);
-        details.extend(self.fit_overlays.iter().filter_map(|fit| {
+        details.extend(self.fit_results.overlays.iter().filter_map(|fit| {
             let belongs_to_active = fit
                 .target
                 .source_dataset_ids
@@ -1753,7 +1463,7 @@ impl InstPlotLiteApp {
         self.processing_open = false;
         self.export_selection = None;
         self.fit_open = false;
-        self.fit_overlays.clear();
+        self.fit_results.overlays.clear();
         self.selected_coordinate = None;
         self.status = "已清空数据".to_owned();
     }
@@ -2135,9 +1845,20 @@ impl eframe::App for InstPlotLiteApp {
                         );
                     }
                 }
-                for (fit_index, fit) in self.fit_overlays.iter().enumerate().filter(|(_, fit)| {
-                    fit_overlay_matches_coordinates(fit, &self.datasets, &plot_x_name, &plot_y_name)
-                }) {
+                for (fit_index, fit) in
+                    self.fit_results
+                        .overlays
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, fit)| {
+                            fit_overlay_matches_coordinates(
+                                fit,
+                                &self.datasets,
+                                &plot_x_name,
+                                &plot_y_name,
+                            )
+                        })
+                {
                     let is_active = fit.target.dataset_index == Some(self.active_dataset);
                     let fit_name = legend_series_name(&fit.name, is_active);
                     let fit_id = egui::Id::new((
@@ -2521,62 +2242,6 @@ fn unique_column_name(dataset: &data::DataSet, requested: &str) -> String {
         }
     }
     unreachable!()
-}
-
-fn fit_kind_name(kind: FitKind) -> &'static str {
-    match kind {
-        FitKind::Polynomial => "多项式",
-        FitKind::Exponential => "指数 y=a·exp(bx)",
-        FitKind::Logarithmic => "对数 y=a·ln(x)+b",
-        FitKind::Power => "幂函数 y=a·x^b",
-        FitKind::Custom => "自定义函数",
-    }
-}
-
-fn editable_fit_field(
-    ui: &mut egui::Ui,
-    title: &str,
-    prefix: &str,
-    value: &mut String,
-    hint: &str,
-) {
-    let accent = Color32::from_gray(132);
-    egui::Frame::new()
-        .fill(Color32::from_gray(31))
-        .stroke(Stroke::new(1.5, accent))
-        .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::same(10))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(title)
-                    .strong()
-                    .color(Color32::from_gray(232)),
-            );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(prefix).strong());
-                ui.scope(|ui| {
-                    ui.visuals_mut().widgets.inactive.bg_fill = Color32::from_gray(56);
-                    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.2, accent);
-                    ui.visuals_mut().widgets.hovered.bg_stroke =
-                        Stroke::new(1.8, Color32::from_gray(184));
-                    ui.visuals_mut().widgets.active.bg_stroke = Stroke::new(2.0, Color32::WHITE);
-                    let width = ui.available_width().max(180.0);
-                    ui.add_sized(
-                        [width, 34.0],
-                        egui::TextEdit::singleline(value).hint_text(hint),
-                    );
-                });
-            });
-        });
-}
-
-fn unit_conversion_name(conversion: XUnitConversion) -> &'static str {
-    match conversion {
-        XUnitConversion::None => "不转换",
-        XUnitConversion::DegreesToRadians => "角度 → 弧度",
-        XUnitConversion::RadiansToDegrees => "弧度 → 角度",
-    }
 }
 
 fn processing_operation_with_x(
