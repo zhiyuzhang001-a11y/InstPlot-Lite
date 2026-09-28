@@ -12,7 +12,11 @@ use crate::{
     fitting::{self, FitMethod},
     fonts, image_export,
     processing::{self, Anchor, ProcessingMetadata, ProcessingOperation},
+    ui::export_window::{
+        self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
+    },
     ui::formatting::{AxisDisplay, compact_label, legend_series_name, split_fit_display_equation},
+    ui::selection::{sole_selected_index, synchronize_selection},
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
         show_embedded_window_close_control, show_tool_viewport,
@@ -64,71 +68,6 @@ enum ProcessingScope {
 enum ProcessingResultMode {
     Overwrite,
     Retain,
-}
-
-struct ExportSelection {
-    format: DataExportFormat,
-    datasets: Vec<bool>,
-    layout: ExportLayout,
-    column_dataset: Option<usize>,
-    columns: Vec<bool>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ExportLayout {
-    Combined,
-    Separate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DataExportFormat {
-    Csv,
-    Xlsx,
-    Tsv,
-    Txt,
-    Dat,
-}
-
-impl DataExportFormat {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Csv => "CSV",
-            Self::Xlsx => "Excel（XLSX）",
-            Self::Tsv => "TSV",
-            Self::Txt => "TXT",
-            Self::Dat => "DAT",
-        }
-    }
-
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Csv => "csv",
-            Self::Xlsx => "xlsx",
-            Self::Tsv => "tsv",
-            Self::Txt => "txt",
-            Self::Dat => "dat",
-        }
-    }
-
-    fn filter_name(self) -> &'static str {
-        match self {
-            Self::Csv => "CSV 数据",
-            Self::Xlsx => "Excel 工作簿",
-            Self::Tsv => "TSV 数据",
-            Self::Txt => "TXT 数据",
-            Self::Dat => "DAT 数据",
-        }
-    }
-
-    fn text_format(self) -> Option<data_export::TextExportFormat> {
-        match self {
-            Self::Csv => Some(data_export::TextExportFormat::Csv),
-            Self::Xlsx => None,
-            Self::Tsv => Some(data_export::TextExportFormat::Tsv),
-            Self::Txt => Some(data_export::TextExportFormat::Txt),
-            Self::Dat => Some(data_export::TextExportFormat::Dat),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -439,7 +378,6 @@ impl InstPlotLiteApp {
         let Some(settings) = self.export_selection.as_ref() else {
             return;
         };
-        let format_label = settings.format.label();
         let dataset_names = self
             .datasets
             .iter()
@@ -470,162 +408,29 @@ impl InstPlotLiteApp {
         } else if let Some(settings) = self.export_selection.as_mut() {
             synchronize_selection(&mut settings.columns, column_names.len(), true);
         }
-
-        let mut open = true;
-        let mut export = false;
-        show_tool_viewport(
-            context,
-            export_viewport_id(),
-            egui::ViewportBuilder::default()
-                .with_title(format!("InstPlot Lite · 导出 {format_label}"))
-                .with_inner_size([470.0, 620.0])
-                .with_min_inner_size([380.0, 360.0])
-                .with_resizable(true),
-            |ui, viewport_class| {
-                if ui.ctx().input(|input| input.viewport().close_requested()) {
-                    open = false;
-                    return;
+        let action = self
+            .export_selection
+            .as_mut()
+            .map_or(ExportAction::None, |settings| {
+                export_window::show(
+                    context,
+                    settings,
+                    ExportWindowData {
+                        active_dataset: self.active_dataset,
+                        dataset_names: &dataset_names,
+                        minimum_columns: &minimum_columns,
+                        column_names: &column_names,
+                    },
+                )
+            });
+        match action {
+            ExportAction::Export => {
+                if let Some(settings) = self.export_selection.take() {
+                    self.export_selected_data(settings);
                 }
-                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("export-window-scroll")
-                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
-                    .scroll_source(ScrollSource::ALL)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add_space(10.0);
-                        ui.indent("export-content", |ui| {
-                            ui.spacing_mut().item_spacing.y = 9.0;
-                            let Some(settings) = self.export_selection.as_mut() else {
-                                return;
-                            };
-                            ui.label("选择要导出的数据集或曲线。");
-                            ui.small("实时拟合结果会随其关联数据集一起导出。");
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("当前").clicked() {
-                                    settings.datasets.fill(false);
-                                    if let Some(value) =
-                                        settings.datasets.get_mut(self.active_dataset)
-                                    {
-                                        *value = true;
-                                    }
-                                }
-                                if ui.button("全选").clicked() {
-                                    settings.datasets.fill(true);
-                                }
-                                if ui.button("全不选").clicked() {
-                                    settings.datasets.fill(false);
-                                }
-                            });
-                            for (index, name) in dataset_names.iter().enumerate() {
-                                if let Some(selected) = settings.datasets.get_mut(index) {
-                                    let marker = if index == self.active_dataset {
-                                        "▶ "
-                                    } else {
-                                        ""
-                                    };
-                                    ui.checkbox(
-                                        selected,
-                                        format!("{marker}{}", compact_label(name, 38)),
-                                    )
-                                    .on_hover_text(name);
-                                }
-                            }
-
-                            let selected_count = settings
-                                .datasets
-                                .iter()
-                                .filter(|selected| **selected)
-                                .count();
-                            if selected_count > 1 {
-                                ui.separator();
-                                ui.label("保存方式");
-                                ui.radio_value(
-                                    &mut settings.layout,
-                                    ExportLayout::Combined,
-                                    if settings.format == DataExportFormat::Xlsx {
-                                        "同一个工作簿（每个数据集一个工作表）"
-                                    } else {
-                                        "同一个分区文件（BEGIN/END）"
-                                    },
-                                );
-                                ui.radio_value(
-                                    &mut settings.layout,
-                                    ExportLayout::Separate,
-                                    "多个独立文件",
-                                );
-                                ui.small("多数据集导出会保留各自全部列和相关拟合结果。");
-                            }
-
-                            let sole = sole_selected_index(&settings.datasets);
-                            if let Some(dataset_index) = sole {
-                                ui.separator();
-                                ui.label("选择列");
-                                ui.horizontal(|ui| {
-                                    if ui.button("全选列").clicked() {
-                                        settings.columns.fill(true);
-                                    }
-                                    if ui.button("全不选列").clicked() {
-                                        settings.columns.fill(false);
-                                    }
-                                });
-                                for (index, name) in column_names.iter().enumerate() {
-                                    if let Some(selected) = settings.columns.get_mut(index) {
-                                        ui.checkbox(selected, format!("{}：{name}", index + 1));
-                                    }
-                                }
-                                let selected_columns = settings
-                                    .columns
-                                    .iter()
-                                    .filter(|selected| **selected)
-                                    .count();
-                                let minimum =
-                                    minimum_columns.get(dataset_index).copied().unwrap_or(1);
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("已选 {selected_columns} 列"));
-                                    if ui
-                                        .add_enabled(
-                                            selected_columns >= minimum,
-                                            egui::Button::new("导出"),
-                                        )
-                                        .on_disabled_hover_text(if minimum == 2 {
-                                            "该数据包含拟合结果，至少选择两列才能重新导入"
-                                        } else {
-                                            "请至少选择一列"
-                                        })
-                                        .clicked()
-                                    {
-                                        export = true;
-                                    }
-                                });
-                            } else {
-                                ui.separator();
-                                if ui
-                                    .add_enabled(
-                                        selected_count > 0,
-                                        egui::Button::new(format!(
-                                            "导出已选 {selected_count} 个数据集"
-                                        )),
-                                    )
-                                    .on_disabled_hover_text("请至少选择一个数据集")
-                                    .clicked()
-                                {
-                                    export = true;
-                                }
-                            }
-                        });
-                        ui.add_space(10.0);
-                    });
-            },
-        );
-        if export {
-            if let Some(settings) = self.export_selection.take() {
-                self.export_selected_data(settings);
             }
-        } else if !open {
-            self.export_selection = None;
+            ExportAction::Close => self.export_selection = None,
+            ExportAction::None => {}
         }
     }
 
@@ -694,7 +499,7 @@ impl InstPlotLiteApp {
             let Some(directory) = rfd::FileDialog::new().pick_folder() else {
                 return;
             };
-            let result = if let Some(format) = settings.format.text_format() {
+            let result = if let Some(format) = data_export_text_format(settings.format) {
                 data_export::save_texts_separate_with_fits(
                     &directory,
                     &datasets,
@@ -744,7 +549,7 @@ impl InstPlotLiteApp {
                 source_y_column: &fit.target.y_column_name,
             })
             .collect::<Vec<_>>();
-        let result = if let Some(format) = settings.format.text_format() {
+        let result = if let Some(format) = data_export_text_format(settings.format) {
             data_export::save_text_combined(&path, &datasets, format, &fits)
         } else {
             data_export::save_workbook_refs_with_fits(&path, &datasets, &fits)
@@ -2809,17 +2614,14 @@ fn is_inside_range(value: f64, first: f64, second: f64) -> bool {
     value >= first.min(second) && value <= first.max(second)
 }
 
-fn sole_selected_index(selected: &[bool]) -> Option<usize> {
-    let mut indices = selected
-        .iter()
-        .enumerate()
-        .filter_map(|(index, is_selected)| is_selected.then_some(index));
-    let first = indices.next()?;
-    indices.next().is_none().then_some(first)
-}
-
-fn synchronize_selection(selected: &mut Vec<bool>, item_count: usize, new_value: bool) {
-    selected.resize(item_count, new_value);
+fn data_export_text_format(format: DataExportFormat) -> Option<data_export::TextExportFormat> {
+    match format {
+        DataExportFormat::Csv => Some(data_export::TextExportFormat::Csv),
+        DataExportFormat::Xlsx => None,
+        DataExportFormat::Tsv => Some(data_export::TextExportFormat::Tsv),
+        DataExportFormat::Txt => Some(data_export::TextExportFormat::Txt),
+        DataExportFormat::Dat => Some(data_export::TextExportFormat::Dat),
+    }
 }
 
 fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
@@ -3291,8 +3093,8 @@ mod tests {
         FitOverlay, FitScope, FitTarget, configure_interface_style, data_curve_series_id,
         dataset_plot_columns, demo_curve, fit_dataset_indices, fit_overlay_matches_coordinates,
         is_inside_range, plot_coordinate_names, preferred_import_columns,
-        reset_plot_bounds_preserving_visibility, sole_selected_index, store_fit_overlay,
-        store_fit_overlays, synchronize_selection, wheel_zoom_factor,
+        reset_plot_bounds_preserving_visibility, store_fit_overlay, store_fit_overlays,
+        wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
@@ -3352,27 +3154,6 @@ mod tests {
         assert!(memory.hidden_items.contains(&series_id));
         assert!(memory.auto_bounds.x);
         assert!(memory.auto_bounds.y);
-    }
-
-    #[test]
-    fn sole_selection_handles_none_one_and_many_without_indexing_empty_state() {
-        assert_eq!(sole_selected_index(&[]), None);
-        assert_eq!(sole_selected_index(&[false, false]), None);
-        assert_eq!(sole_selected_index(&[false, true, false]), Some(1));
-        assert_eq!(sole_selected_index(&[true, true]), None);
-    }
-
-    #[test]
-    fn selection_state_tracks_items_added_or_removed_while_a_window_is_open() {
-        let mut selected = vec![true, false, true];
-        synchronize_selection(&mut selected, 1, false);
-        assert_eq!(selected, [true]);
-        synchronize_selection(&mut selected, 3, false);
-        assert_eq!(selected, [true, false, false]);
-
-        let mut columns = vec![false];
-        synchronize_selection(&mut columns, 3, true);
-        assert_eq!(columns, [false, true, true]);
     }
 
     #[test]
