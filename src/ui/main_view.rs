@@ -35,8 +35,11 @@ pub fn show_toolbar(
     let mut actions = Vec::new();
     ui.add_space(SPACE_XS);
     ui.horizontal_wrapped(|ui| {
-        ui.heading("InstPlot Lite");
+        ui.label(egui::RichText::new("InstPlot Lite").size(18.0).strong());
+        ui.add_space(SPACE_XS);
         ui.separator();
+        ui.add_space(SPACE_XS);
+
         if ui
             .button(egui::RichText::new("打开文件").strong())
             .clicked()
@@ -62,6 +65,11 @@ pub fn show_toolbar(
                 }
             });
         });
+
+        ui.add_space(SPACE_XS);
+        ui.separator();
+        ui.add_space(SPACE_XS);
+
         if ui
             .add_enabled(
                 has_data,
@@ -80,6 +88,11 @@ pub fn show_toolbar(
         {
             actions.push(MainAction::OpenFitting);
         }
+
+        ui.add_space(SPACE_XS);
+        ui.separator();
+        ui.add_space(SPACE_XS);
+
         if ui
             .add_enabled(can_undo, egui::Button::new("← 撤销"))
             .on_hover_text("撤销最近一次删除或数据处理")
