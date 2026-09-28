@@ -7,9 +7,10 @@ use crate::{
     data, data_export,
     edit_history::{EditHistory, HistoryEffect},
     fitting::{self, FitMethod},
-    fonts, image_export,
+    fonts,
     processing::{self, ProcessingMetadata, ProcessingOperation},
     session::{FitOverlay, FitResultState, FitTarget},
+    ui::delete_confirmation::{self, DeleteAction},
     ui::export_window::{
         self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
     },
@@ -27,6 +28,7 @@ use crate::{
 };
 
 mod import;
+mod screenshot;
 
 const PLOT_LEFT_GUTTER: f32 = 20.0;
 const PLOT_BOTTOM_GUTTER: f32 = 12.0;
@@ -401,51 +403,6 @@ impl InstPlotLiteApp {
         Ok(())
     }
 
-    fn request_plot_png(&mut self, context: &egui::Context) {
-        if self.last_export_rect.is_none() {
-            self.status = "绘图区尚未准备好，暂时无法导出图片".to_owned();
-            return;
-        }
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("PNG 图片", &["png"])
-            .set_file_name("instplot-plot.png")
-            .save_file()
-        else {
-            return;
-        };
-        self.pending_screenshot = Some(with_png_extension(path));
-        context.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-        context.request_repaint();
-        self.status = "正在生成绘图区 PNG…".to_owned();
-    }
-
-    fn handle_screenshot_result(&mut self, context: &egui::Context) {
-        let image = context.input(|input| {
-            input.events.iter().find_map(|event| match event {
-                egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                _ => None,
-            })
-        });
-        let Some(image) = image else {
-            if self.pending_screenshot.is_some() {
-                context.request_repaint_after(std::time::Duration::from_millis(50));
-            }
-            return;
-        };
-        let (Some(path), Some(plot_rect)) = (self.pending_screenshot.take(), self.last_export_rect)
-        else {
-            return;
-        };
-        match image_export::save_plot_png(&path, &image, plot_rect, context.pixels_per_point()) {
-            Ok(()) => self.status = format!("图片已导出：{}", path.display()),
-            Err(error) => self.status = format!("图片导出失败：{error}"),
-        }
-        if self.close_after_screenshot {
-            self.close_after_screenshot = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-    }
-
     fn column_names(&self) -> Vec<String> {
         self.datasets
             .get(self.active_dataset)
@@ -480,28 +437,13 @@ impl InstPlotLiteApp {
         else {
             return;
         };
-        let mut confirm = false;
-        let mut cancel = false;
-        egui::Window::new("确认删除")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(context, |ui| {
-                ui.label(format!("确定删除选中的 {count} 个数据点吗？"));
-                ui.horizontal(|ui| {
-                    if ui.button("删除").clicked() {
-                        confirm = true;
-                    }
-                    if ui.button("取消").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-        if confirm {
-            self.apply_pending_deletion();
-        } else if cancel {
-            self.pending_deletion = None;
-            self.status = "已取消删除".to_owned();
+        match delete_confirmation::show(context, count) {
+            DeleteAction::Confirm => self.apply_pending_deletion(),
+            DeleteAction::Cancel => {
+                self.pending_deletion = None;
+                self.status = "已取消删除".to_owned();
+            }
+            DeleteAction::None => {}
         }
     }
 
@@ -1930,13 +1872,7 @@ impl eframe::App for InstPlotLiteApp {
                 }
             }
         }
-        if let Some(path) = self.startup_screenshot.take() {
-            self.pending_screenshot = Some(with_png_extension(path));
-            self.close_after_screenshot = true;
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-            ui.ctx().request_repaint();
-        }
+        self.begin_startup_screenshot_if_requested(ui.ctx());
         self.show_delete_confirmation(ui.ctx());
         self.show_processing_window(ui.ctx());
         self.show_export_columns_window(ui.ctx());
@@ -2212,17 +2148,6 @@ fn processing_summary(metadata: &ProcessingMetadata) -> String {
         ProcessingMetadata::Formula { expression, a, b } => {
             format!("公式 {expression}（a={a:.6}，b={b:.6}）")
         }
-    }
-}
-
-fn with_png_extension(path: PathBuf) -> PathBuf {
-    if path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
-    {
-        path
-    } else {
-        path.with_extension("png")
     }
 }
 

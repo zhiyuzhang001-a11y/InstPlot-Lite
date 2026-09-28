@@ -1,3 +1,4 @@
+pub(crate) mod delete_confirmation;
 pub(crate) mod export_window;
 pub(crate) mod fitting_window;
 pub(crate) mod formatting;
