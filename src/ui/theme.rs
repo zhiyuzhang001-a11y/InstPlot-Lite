@@ -38,7 +38,7 @@ pub(crate) fn shell_scope<R>(
     .inner
 }
 
-fn apply_shell_style(style: &mut egui::Style) {
+pub(crate) fn apply_shell_style(style: &mut egui::Style) {
     use egui::Stroke;
 
     debug_assert_ne!(PLOT_BG_IMMUTABLE, SHELL_BG);

@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use super::theme::{CONTROL_BG, PANEL_BG, SPACE_MD, SPACE_SM, apply_shell_style};
+
 pub(crate) fn processing_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("instplot-lite-processing")
 }
@@ -60,14 +62,23 @@ pub(crate) fn show_embedded_window_close_control(
             .ctx()
             .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     let mut close_clicked = false;
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            close_clicked = ui
-                .button("关闭")
-                .on_hover_text("关闭此窗口（Esc）")
-                .clicked();
+    egui::Frame::NONE
+        .fill(PANEL_BG)
+        .inner_margin(egui::Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close_clicked = ui
+                        .add(
+                            egui::Button::new("关闭")
+                                .fill(CONTROL_BG)
+                                .stroke(egui::Stroke::NONE),
+                        )
+                        .on_hover_text("关闭此窗口（Esc）")
+                        .clicked();
+                });
+            });
         });
-    });
     ui.separator();
     if escape_pressed || close_clicked {
         *open = false;
@@ -75,6 +86,14 @@ pub(crate) fn show_embedded_window_close_control(
     } else {
         false
     }
+}
+
+pub(crate) fn apply_tool_window_surface(ui: &mut egui::Ui) {
+    ui.painter()
+        .rect_filled(ui.max_rect(), egui::CornerRadius::ZERO, PANEL_BG);
+    let mut style = ui.style().as_ref().clone();
+    apply_shell_style(&mut style);
+    ui.set_style(style);
 }
 
 pub(crate) fn focus_viewport(context: &egui::Context, viewport_id: egui::ViewportId) {

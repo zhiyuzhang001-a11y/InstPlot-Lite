@@ -2,7 +2,8 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 
 use super::theme::{CONTROL_RADIUS, SPACE_MD, SPACE_SM, SPACE_XS};
 use super::tool_window::{
-    fitting_viewport_id, show_embedded_window_close_control, show_tool_viewport,
+    apply_tool_window_surface, fitting_viewport_id, show_embedded_window_close_control,
+    show_tool_viewport,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +122,7 @@ pub(crate) fn show(
             .with_min_inner_size([560.0, 470.0])
             .with_resizable(true),
         |ui, viewport_class| {
+            apply_tool_window_surface(ui);
             if ui.ctx().input(|input| input.viewport().close_requested()) {
                 open = false;
                 return;

@@ -4,7 +4,10 @@ use super::{
     formatting::compact_label,
     selection::sole_selected_index,
     theme::SPACE_SM,
-    tool_window::{export_viewport_id, show_embedded_window_close_control, show_tool_viewport},
+    tool_window::{
+        apply_tool_window_surface, export_viewport_id, show_embedded_window_close_control,
+        show_tool_viewport,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +96,7 @@ pub(crate) fn show(
             .with_min_inner_size([380.0, 360.0])
             .with_resizable(true),
         |ui, viewport_class| {
+            apply_tool_window_surface(ui);
             if ui.ctx().input(|input| input.viewport().close_requested()) {
                 open = false;
                 return;
