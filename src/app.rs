@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use eframe::egui::{self, Color32, PointerButton, Rect, Stroke, StrokeKind};
-use egui_plot::{Legend, Plot, PlotMemory, PlotPoint};
+use eframe::egui::{self, Rect};
 
 use crate::{
     data, data_export,
@@ -15,11 +14,10 @@ use crate::{
         self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
     },
     ui::fitting_window::{self, FitAction, FitKind, FitScope, FitSettings, XUnitConversion},
-    ui::formatting::{AxisDisplay, anchor_name, compact_label, split_fit_display_equation},
+    ui::formatting::{anchor_name, compact_label, split_fit_display_equation},
     ui::main_view::{self, MainAction, SidebarAction},
-    ui::plot_series::{
-        self, PendingHighlight, PlotSeriesInput, plot_coordinate_names, plotted_axis_range,
-    },
+    ui::plot_series::PendingHighlight,
+    ui::plot_view::{self, PlotViewInput},
     ui::processing_window::{
         self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
     },
@@ -32,10 +30,6 @@ use crate::{
 
 mod import;
 mod screenshot;
-
-const PLOT_LEFT_GUTTER: f32 = 20.0;
-const PLOT_BOTTOM_GUTTER: f32 = 12.0;
-const PLOT_EXPORT_TOP_GUTTER: f32 = 8.0;
 
 struct PendingDeletion {
     dataset_index: usize,
@@ -1474,220 +1468,53 @@ impl eframe::App for InstPlotLiteApp {
             names
         };
 
-        let plot_height = (ui.available_height()
-            - PLOT_BOTTOM_GUTTER
-            - main_view::STATUS_ROW_HEIGHT
-            - main_view::STATUS_BOTTOM_INSET)
-            .max(220.0);
-        let (plot_x_name, plot_y_name) = plot_coordinate_names(
-            &self.datasets,
-            self.active_dataset,
-            self.x_column,
-            self.y_column,
-        )
-        .unwrap_or_else(|| {
-            (
-                column_names
-                    .get(self.x_column)
-                    .cloned()
-                    .unwrap_or_else(|| "x".to_owned()),
-                column_names
-                    .get(self.y_column)
-                    .cloned()
-                    .unwrap_or_else(|| "y".to_owned()),
-            )
-        });
-        let x_axis_display = AxisDisplay::from_range(plotted_axis_range(
-            &self.datasets,
-            self.active_dataset,
-            &plot_x_name,
-            &plot_y_name,
-            0,
-        ));
-        let y_axis_display = AxisDisplay::from_range(plotted_axis_range(
-            &self.datasets,
-            self.active_dataset,
-            &plot_x_name,
-            &plot_y_name,
-            1,
-        ));
-        let plot_id = egui::Id::new("main-plot");
-        let hidden_series_before = PlotMemory::load(ui.ctx(), plot_id)
-            .map(|memory| memory.hidden_items)
-            .unwrap_or_default();
-        if self.reset_view {
-            reset_plot_bounds_preserving_visibility(ui.ctx(), plot_id);
-            self.reset_view = false;
-        }
-        let mut plot = Plot::new("main-plot")
-            .id(plot_id)
-            .legend(Legend::default())
-            .height(plot_height)
-            .allow_zoom(true)
-            .allow_scroll(false)
-            .allow_drag(true)
-            .allow_boxed_zoom(false)
-            .pan_pointer_button(PointerButton::Secondary)
-            .x_axis_formatter(move |mark, _range| {
-                x_axis_display.format_tick(mark.value, mark.step_size)
-            })
-            .y_axis_formatter(move |mark, _range| {
-                y_axis_display.format_tick(mark.value, mark.step_size)
+        let pending_highlight = self
+            .pending_deletion
+            .as_ref()
+            .map(|pending| PendingHighlight {
+                dataset_index: pending.dataset_index,
+                rows: &pending.rows,
+                x_column: pending.x_column,
+                y_column: pending.y_column,
             });
-        plot = plot.x_axis_label(
-            egui::RichText::new(x_axis_display.label(&plot_x_name))
-                .size(17.0)
-                .strong(),
+        let plot_response = plot_view::show(
+            ui,
+            PlotViewInput {
+                demo_points: &self.demo_points,
+                datasets: &self.datasets,
+                active_dataset: self.active_dataset,
+                x_column: self.x_column,
+                y_column: self.y_column,
+                column_names: &column_names,
+                fit_overlays: &self.fit_results.overlays,
+                pending_highlight,
+                pending_deletion: self.pending_deletion.is_some(),
+                reset_view: self.reset_view,
+                visible_x_range: self.visible_x_range,
+                last_plot_rect: self.last_plot_rect,
+                selection_start: self.selection_start,
+                selection_current: self.selection_current,
+                selected_coordinate: self.selected_coordinate,
+                status: &self.status,
+            },
         );
-        plot = plot.y_axis_label(
-            egui::RichText::new(y_axis_display.label(&plot_y_name))
-                .size(17.0)
-                .strong(),
-        );
-        let mut plotted_series_ids = Vec::new();
-        let plot_row = ui.horizontal(|ui| {
-            // egui_plot paints the vertical axis title just outside its own
-            // plot rectangle, so reserve a real gutter inside the viewport.
-            ui.add_space(PLOT_LEFT_GUTTER);
-            plot.show(ui, |plot_ui| {
-                if plot_ui.response().contains_pointer() {
-                    let wheel_delta = plot_ui.ctx().input(|input| input.smooth_scroll_delta.y);
-                    if wheel_delta != 0.0 {
-                        plot_ui.zoom_bounds_around_hovered(egui::Vec2::splat(wheel_zoom_factor(
-                            wheel_delta,
-                        )));
-                    }
-                }
-                let pending_highlight =
-                    self.pending_deletion
-                        .as_ref()
-                        .map(|pending| PendingHighlight {
-                            dataset_index: pending.dataset_index,
-                            rows: &pending.rows,
-                            x_column: pending.x_column,
-                            y_column: pending.y_column,
-                        });
-                plotted_series_ids = plot_series::show(
-                    plot_ui,
-                    PlotSeriesInput {
-                        demo_points: &self.demo_points,
-                        datasets: &self.datasets,
-                        active_dataset: self.active_dataset,
-                        plot_x_name: &plot_x_name,
-                        plot_y_name: &plot_y_name,
-                        last_plot_rect: self.last_plot_rect,
-                        visible_x_range: self.visible_x_range,
-                        pending_highlight,
-                        fit_overlays: &self.fit_results.overlays,
-                    },
-                );
-            })
-        });
-        ui.add_space(PLOT_BOTTOM_GUTTER);
-        self.last_export_rect = Some(Rect::from_min_max(
-            plot_row.response.rect.min - egui::vec2(0.0, PLOT_EXPORT_TOP_GUTTER),
-            plot_row.response.rect.max + egui::vec2(0.0, PLOT_BOTTOM_GUTTER),
-        ));
-        main_view::show_status(ui, &self.status, self.selected_coordinate);
-        let response = plot_row.inner;
-        self.last_plot_rect = Some(response.response.rect);
-        let bounds = response.transform.bounds();
-        let all_series_hidden_before = !plotted_series_ids.is_empty()
-            && plotted_series_ids
-                .iter()
-                .all(|series_id| hidden_series_before.contains(series_id));
-        let all_series_hidden_after = !plotted_series_ids.is_empty()
-            && PlotMemory::load(ui.ctx(), plot_id).is_some_and(|memory| {
-                plotted_series_ids
-                    .iter()
-                    .all(|series_id| memory.hidden_items.contains(series_id))
+        self.reset_view = false;
+        self.last_plot_rect = Some(plot_response.last_plot_rect);
+        self.last_export_rect = Some(plot_response.last_export_rect);
+        self.visible_x_range = plot_response.visible_x_range;
+        self.selection_start = plot_response.selection_start;
+        self.selection_current = plot_response.selection_current;
+        self.selected_coordinate = plot_response.selected_coordinate;
+        if let Some(request) = plot_response.deletion_request {
+            self.pending_deletion = Some(PendingDeletion {
+                dataset_index: request.dataset_index,
+                rows: request.rows,
+                x_column: request.x_column,
+                y_column: request.y_column,
             });
-        if !all_series_hidden_before && !all_series_hidden_after {
-            self.visible_x_range = Some([bounds.min()[0], bounds.max()[0]]);
         }
-
-        if self.pending_deletion.is_none() {
-            if response.response.drag_started_by(PointerButton::Primary) {
-                self.selected_coordinate = None;
-                self.selection_start = response.response.interact_pointer_pos();
-                self.selection_current = self.selection_start;
-            }
-            if response.response.dragged_by(PointerButton::Primary) {
-                self.selection_current = response.response.interact_pointer_pos();
-            }
-            if let (Some(start), Some(current)) = (self.selection_start, self.selection_current) {
-                let selection = Rect::from_two_pos(start, current);
-                if selection.width() >= 2.0 || selection.height() >= 2.0 {
-                    ui.painter().rect_stroke(
-                        selection,
-                        0.0,
-                        Stroke::new(1.5, Color32::YELLOW),
-                        StrokeKind::Inside,
-                    );
-                }
-            }
-            if response.response.drag_stopped_by(PointerButton::Primary) {
-                let start = self.selection_start.take();
-                let end = response
-                    .response
-                    .interact_pointer_pos()
-                    .or_else(|| self.selection_current.take());
-                self.selection_current = None;
-                if let (Some(start), Some(end)) = (start, end)
-                    && start.distance(end) >= 4.0
-                {
-                    let first = response.transform.value_from_position(start);
-                    let second = response.transform.value_from_position(end);
-                    if let Some(dataset) = self.datasets.get(self.active_dataset) {
-                        let rows = dataset.rows_in_bounds(
-                            self.x_column,
-                            self.y_column,
-                            [first.x, second.x],
-                            [first.y, second.y],
-                        );
-                        if rows.is_empty() {
-                            self.status = "框选区域内没有可删除的数据点".to_owned();
-                        } else {
-                            self.pending_deletion = Some(PendingDeletion {
-                                dataset_index: self.active_dataset,
-                                rows,
-                                x_column: self.x_column,
-                                y_column: self.y_column,
-                            });
-                        }
-                    }
-                }
-            } else if response.response.clicked_by(PointerButton::Primary)
-                && let Some(pointer) = response.response.interact_pointer_pos()
-            {
-                let clicked = response.transform.value_from_position(pointer);
-                self.selected_coordinate = Some([clicked.x, clicked.y]);
-                self.status = "已显示点击位置坐标".to_owned();
-
-                if let Some(dataset) = self.datasets.get(self.active_dataset) {
-                    let nearest = dataset
-                        .row_points(self.x_column, self.y_column)
-                        .filter_map(|(row_index, [x, y])| {
-                            let screen = response
-                                .transform
-                                .position_from_point(&PlotPoint::new(x, y));
-                            let distance_sq = screen.distance_sq(pointer);
-                            (distance_sq <= 64.0).then_some((row_index, distance_sq))
-                        })
-                        .min_by(|left, right| left.1.total_cmp(&right.1));
-                    if let Some((row_index, _)) = nearest {
-                        let x = dataset.columns[self.x_column].values[row_index];
-                        let y = dataset.columns[self.y_column].values[row_index];
-                        self.selected_coordinate = Some([x, y]);
-                        self.pending_deletion = Some(PendingDeletion {
-                            dataset_index: self.active_dataset,
-                            rows: vec![row_index],
-                            x_column: self.x_column,
-                            y_column: self.y_column,
-                        });
-                    }
-                }
-            }
+        if let Some(status) = plot_response.status_update {
+            self.status = status;
         }
         self.begin_startup_screenshot_if_requested(ui.ctx());
         self.show_delete_confirmation(ui.ctx());
@@ -1719,15 +1546,6 @@ fn finite_range(values: &[f64]) -> Option<[f64; 2]> {
         maximum = maximum.max(value);
     }
     (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
-}
-
-fn reset_plot_bounds_preserving_visibility(context: &egui::Context, plot_id: egui::Id) -> bool {
-    let Some(mut memory) = PlotMemory::load(context, plot_id) else {
-        return false;
-    };
-    memory.auto_bounds = true.into();
-    memory.store(context, plot_id);
-    true
 }
 
 fn unique_column_name(dataset: &data::DataSet, requested: &str) -> String {
@@ -1827,10 +1645,6 @@ fn processing_summary(metadata: &ProcessingMetadata) -> String {
     }
 }
 
-fn wheel_zoom_factor(wheel_delta: f32) -> f32 {
-    (wheel_delta / 200.0).exp()
-}
-
 fn demo_curve(point_count: usize) -> Vec<[f64; 2]> {
     let divisor = point_count.saturating_sub(1).max(1) as f64;
     (0..point_count)
@@ -1894,14 +1708,14 @@ fn fit_dataset_indices(
 mod tests {
     use super::{
         FitOverlay, FitScope, FitTarget, demo_curve, fit_dataset_indices, is_inside_range,
-        reset_plot_bounds_preserving_visibility, store_fit_overlay, store_fit_overlays,
-        wheel_zoom_factor,
+        store_fit_overlay, store_fit_overlays,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use crate::ui::plot_series::{
         data_curve_series_id, dataset_plot_columns, fit_overlay_matches_coordinates,
         plot_coordinate_names,
     };
+    use crate::ui::plot_view::{reset_plot_bounds_preserving_visibility, wheel_zoom_factor};
     use eframe::egui;
     use egui_plot::{Line, Plot, PlotMemory};
     use std::path::PathBuf;
