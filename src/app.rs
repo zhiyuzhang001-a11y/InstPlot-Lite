@@ -11,11 +11,16 @@ use crate::{
     edit_history::{EditHistory, HistoryEffect},
     fitting::{self, FitMethod},
     fonts, image_export,
-    processing::{self, Anchor, ProcessingMetadata, ProcessingOperation},
+    processing::{self, ProcessingMetadata, ProcessingOperation},
     ui::export_window::{
         self, DataExportFormat, ExportAction, ExportLayout, ExportSelection, ExportWindowData,
     },
-    ui::formatting::{AxisDisplay, compact_label, legend_series_name, split_fit_display_equation},
+    ui::formatting::{
+        AxisDisplay, anchor_name, compact_label, legend_series_name, split_fit_display_equation,
+    },
+    ui::processing_window::{
+        self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
+    },
     ui::selection::{sole_selected_index, synchronize_selection},
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
@@ -34,40 +39,6 @@ struct PendingDeletion {
     rows: Vec<usize>,
     x_column: usize,
     y_column: usize,
-}
-
-struct ProcessingSettings {
-    scope: ProcessingScope,
-    selected_datasets: Vec<bool>,
-    result_mode: ProcessingResultMode,
-    fit_min: f64,
-    fit_max: f64,
-    background_order: usize,
-    local_min: f64,
-    local_max: f64,
-    local_transition: f64,
-    local_anchor: Anchor,
-    local_strength: f64,
-    denoise_window: usize,
-    denoise_order: usize,
-    denoise_in_range: bool,
-    denoise_min: f64,
-    denoise_max: f64,
-    formula: String,
-    formula_a: String,
-    formula_b: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProcessingScope {
-    Current,
-    Selected,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProcessingResultMode {
-    Overwrite,
-    Retain,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,32 +134,6 @@ struct FitTarget {
     source_dataset_ids: Vec<String>,
     x_column_name: String,
     y_column_name: String,
-}
-
-impl Default for ProcessingSettings {
-    fn default() -> Self {
-        Self {
-            scope: ProcessingScope::Current,
-            selected_datasets: Vec::new(),
-            result_mode: ProcessingResultMode::Overwrite,
-            fit_min: 0.0,
-            fit_max: 1.0,
-            background_order: 2,
-            local_min: 0.0,
-            local_max: 1.0,
-            local_transition: 0.0,
-            local_anchor: Anchor::Left,
-            local_strength: 1.0,
-            denoise_window: 11,
-            denoise_order: 3,
-            denoise_in_range: false,
-            denoise_min: 0.0,
-            denoise_max: 1.0,
-            formula: "a * y + b".to_owned(),
-            formula_a: "1".to_owned(),
-            formula_b: "0".to_owned(),
-        }
-    }
 }
 
 pub struct InstPlotLiteApp {
@@ -941,350 +886,101 @@ impl InstPlotLiteApp {
         if !self.processing_open {
             return;
         }
-        let mut open = true;
-        let mut requested: Option<(ProcessingOperation, String)> = None;
-        let viewport_id = processing_viewport_id();
-        show_tool_viewport(
+        let dataset_names = self
+            .datasets
+            .iter()
+            .map(data::DataSet::display_name)
+            .collect::<Vec<_>>();
+        let response = processing_window::show(
             context,
-            viewport_id,
-            egui::ViewportBuilder::default()
-                .with_title("InstPlot Lite · 数据处理")
-                .with_inner_size([570.0, 570.0])
-                .with_min_inner_size([520.0, 500.0])
-                .with_resizable(true),
-            |ui, viewport_class| {
-                if ui.ctx().input(|input| input.viewport().close_requested()) {
-                    open = false;
-                    return;
-                }
-                if show_embedded_window_close_control(ui, viewport_class, &mut open) {
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("processing-window-scroll")
-                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
-                    .scroll_source(ScrollSource::ALL)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                ui.add_space(12.0);
-                ui.indent("processing-content", |ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
-                let dataset_names: Vec<String> = self
-                    .datasets
-                    .iter()
-                    .map(data::DataSet::display_name)
-                    .collect();
-                ui.horizontal(|ui| {
-                    ui.label("结果写入：");
-                    ui.selectable_value(
-                        &mut self.processing_settings.result_mode,
-                        ProcessingResultMode::Overwrite,
-                        "覆盖原列",
-                    );
-                    ui.selectable_value(
-                        &mut self.processing_settings.result_mode,
-                        ProcessingResultMode::Retain,
-                        "保留派生列",
-                    );
-                });
-                ui.small("此设置适用于本窗口全部操作和所有选中曲线；覆盖操作仍可撤销。");
-                ui.horizontal(|ui| {
-                    ui.label("处理范围：");
-                    ui.selectable_value(
-                        &mut self.processing_settings.scope,
-                        ProcessingScope::Current,
-                        "当前曲线",
-                    );
-                    ui.selectable_value(
-                        &mut self.processing_settings.scope,
-                        ProcessingScope::Selected,
-                        "选择曲线",
-                    );
-                });
-                if self.processing_settings.selected_datasets.len() != dataset_names.len() {
-                    self.processing_settings.selected_datasets = (0..dataset_names.len())
-                        .map(|index| index == self.active_dataset)
-                        .collect();
-                }
-                if self.processing_settings.scope == ProcessingScope::Current {
-                    let previous_dataset = self.active_dataset;
-                    ui.horizontal(|ui| {
-                        ui.label("当前曲线：");
-                        egui::ComboBox::from_id_salt("processing-dataset")
-                            .width(300.0)
-                            .selected_text(
-                                dataset_names
-                                    .get(self.active_dataset)
-                                    .map(String::as_str)
-                                    .unwrap_or("未选择"),
-                            )
-                            .show_ui(ui, |ui| {
-                                for (index, name) in dataset_names.iter().enumerate() {
-                                    ui.selectable_value(&mut self.active_dataset, index, name);
-                                }
-                            });
-                    });
-                    if self.active_dataset != previous_dataset {
-                        self.clamp_columns();
-                        self.reset_after_coordinate_change();
-                    }
-                } else {
-                    ui.horizontal(|ui| {
-                        if ui.button("全选").clicked() {
-                            self.processing_settings.selected_datasets.fill(true);
-                        }
-                        if ui.button("全不选").clicked() {
-                            self.processing_settings.selected_datasets.fill(false);
-                        }
-                    });
-                    for (index, name) in dataset_names.iter().enumerate() {
-                        ui.checkbox(
-                            &mut self.processing_settings.selected_datasets[index],
-                            name,
-                        );
-                    }
-                }
-                ui.label("结果写入方式由上方全局设置决定；批量处理可一次撤销。");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("对称处理").clicked() {
-                        requested = Some((ProcessingOperation::Center, "对称".to_owned()));
-                    }
-                    if ui.button("归一化").clicked() {
-                        requested = Some((
-                            ProcessingOperation::CenterNormalize { top_n: 20 },
-                            "归一化".to_owned(),
-                        ));
-                    }
-                    ui.small("归一化沿用原版：先对称，再取最高 20 个有限值的均值");
-                });
-
-                ui.separator();
-                ui.strong("去背底（多项式）");
-                ui.horizontal(|ui| {
-                    ui.label("拟合 X：");
-                    ui.add(egui::DragValue::new(&mut self.processing_settings.fit_min));
-                    ui.label("至");
-                    ui.add(egui::DragValue::new(&mut self.processing_settings.fit_max));
-                    ui.label("阶数");
-                    ui.add(
-                        egui::DragValue::new(&mut self.processing_settings.background_order)
-                            .range(0..=5),
-                    );
-                    if ui.button(egui::RichText::new("执行").strong()).clicked() {
-                        let order = self.processing_settings.background_order;
-                        requested = Some((
-                            ProcessingOperation::PolynomialBackground {
-                                x_column: self.x_column,
-                                fit_min: self.processing_settings.fit_min,
-                                fit_max: self.processing_settings.fit_max,
-                                order,
-                            },
-                            format!("去背底{order}阶"),
-                        ));
-                    }
-                });
-
-                ui.separator();
-                ui.strong("局部展平");
-                ui.label(
-                    egui::RichText::new(
-                        "去除指定 X 区间的线性倾斜，使该段接近水平；锚点位置保持不变。",
-                    )
-                    .weak(),
-                );
-                ui.horizontal(|ui| {
-                    ui.label("X：");
-                    ui.add(egui::DragValue::new(
-                        &mut self.processing_settings.local_min,
-                    ));
-                    ui.label("至");
-                    ui.add(egui::DragValue::new(
-                        &mut self.processing_settings.local_max,
-                    ));
-                    ui.label("过渡")
-                        .on_hover_text("在区间两侧逐渐应用修正，减小边缘折角；0 表示不过渡");
-                    ui.add(
-                        egui::DragValue::new(&mut self.processing_settings.local_transition)
-                            .range(0.0..=f64::INFINITY),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("锚点")
-                        .on_hover_text("这个位置的 Y 值保持不变，可选择左端、右端或中心");
-                    egui::ComboBox::from_id_salt("local-anchor")
-                        .selected_text(anchor_name(self.processing_settings.local_anchor))
-                        .show_ui(ui, |ui| {
-                            for anchor in [Anchor::Left, Anchor::Right, Anchor::Center] {
-                                ui.selectable_value(
-                                    &mut self.processing_settings.local_anchor,
-                                    anchor,
-                                    anchor_name(anchor),
-                                );
-                            }
-                        });
-                    ui.label("强度")
-                        .on_hover_text("1.0 表示完全去除拟合斜率，0.5 表示修正一半");
-                    ui.add(
-                        egui::Slider::new(&mut self.processing_settings.local_strength, 0.0..=1.0)
-                            .show_value(true),
-                    );
-                    if ui
-                        .button(egui::RichText::new("执行").strong())
-                        .on_hover_text("按上方结果写入方式应用局部展平")
-                        .clicked()
-                    {
-                        requested = Some((
-                            ProcessingOperation::LocalFlatten {
-                                x_column: self.x_column,
-                                x1: self.processing_settings.local_min,
-                                x2: self.processing_settings.local_max,
-                                transition: self.processing_settings.local_transition,
-                                anchor: self.processing_settings.local_anchor,
-                                strength: self.processing_settings.local_strength,
-                            },
-                            "局部展平".to_owned(),
-                        ));
-                    }
-                });
-
-                ui.separator();
-                ui.strong("Savitzky–Golay 去噪");
-                ui.horizontal(|ui| {
-                    ui.label("窗口");
-                    ui.add(
-                        egui::DragValue::new(&mut self.processing_settings.denoise_window)
-                            .range(3..=999)
-                            .speed(2),
-                    );
-                    ui.label("阶数");
-                    ui.add(
-                        egui::DragValue::new(&mut self.processing_settings.denoise_order)
-                            .range(0..=9),
-                    );
-                    ui.checkbox(
-                        &mut self.processing_settings.denoise_in_range,
-                        "仅处理 X 区间",
-                    );
-                });
-                if self.processing_settings.denoise_in_range {
-                    ui.horizontal(|ui| {
-                        ui.label("X：");
-                        ui.add(egui::DragValue::new(
-                            &mut self.processing_settings.denoise_min,
-                        ));
-                        ui.label("至");
-                        ui.add(egui::DragValue::new(
-                            &mut self.processing_settings.denoise_max,
-                        ));
-                    });
-                }
-                if ui
-                    .button(egui::RichText::new("执行去噪").strong())
-                    .clicked()
-                {
-                    let range = self.processing_settings.denoise_in_range.then_some((
-                        self.x_column,
-                        self.processing_settings.denoise_min,
-                        self.processing_settings.denoise_max,
-                    ));
-                    requested = Some((
-                        ProcessingOperation::Denoise {
-                            window_length: self.processing_settings.denoise_window,
-                            polyorder: self.processing_settings.denoise_order,
-                            range,
-                        },
-                        "去噪".to_owned(),
-                    ));
-                }
-
-                ui.separator();
-                ui.strong("公式计算");
-                ui.label(
-                    egui::RichText::new(
-                        "按行计算：含 x 的公式生成新 X 列，含 y 的公式生成新 Y 列；a、b 是下方参数。",
-                    )
-                    .weak(),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    for (label, formula) in [
-                        ("a × y + b", "a * y + b"),
-                        ("y + b", "y + b"),
-                        ("a × y", "a * y"),
-                        ("−y", "-y"),
-                    ] {
-                        if ui.button(label).clicked() {
-                            self.processing_settings.formula = formula.to_owned();
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("公式：");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.processing_settings.formula)
-                            .desired_width(360.0)
-                            .hint_text("例如：a * y + b"),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("a");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.processing_settings.formula_a)
-                            .desired_width(95.0)
-                            .hint_text("例如：10/11"),
-                    );
-                    ui.label("b");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.processing_settings.formula_b)
-                            .desired_width(95.0)
-                            .hint_text("例如：(2+3)/7"),
-                    );
-                    if ui
-                        .button(egui::RichText::new("执行公式").strong())
-                        .on_hover_text("根据公式中的 x 或 y，按上方结果写入方式应用公式")
-                        .clicked()
-                    {
-                        let a = match fitting::evaluate_constant_expression(
-                            &self.processing_settings.formula_a,
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                self.status = format!("公式系数 a 无效：{}", error.reason);
-                                return;
-                            }
-                        };
-                        let b = match fitting::evaluate_constant_expression(
-                            &self.processing_settings.formula_b,
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                self.status = format!("公式系数 b 无效：{}", error.reason);
-                                return;
-                            }
-                        };
-                        requested = Some((
-                            ProcessingOperation::Formula {
-                                x_column: self.x_column,
-                                expression: self.processing_settings.formula.clone(),
-                                a,
-                                b,
-                            },
-                            "公式".to_owned(),
-                        ));
-                    }
-                });
-                ui.small(
-                    "公式和系数支持 + − × ÷ ^、括号、sin、cos、tan、exp、ln/log、sqrt、abs、arctan，以及 pi、e。",
-                );
-                });
-                ui.add_space(12.0);
-            });
-            },
+            &mut self.processing_settings,
+            &dataset_names,
+            self.active_dataset,
         );
-        self.processing_open = open;
-        if let Some((operation, suffix)) = requested {
-            self.apply_processing(operation, &suffix);
+        if response.active_dataset != self.active_dataset {
+            self.active_dataset = response.active_dataset;
+            self.clamp_columns();
+            self.reset_after_coordinate_change();
         }
+        self.processing_open = response.open;
+        let Some(action) = response.action else {
+            return;
+        };
+        let (operation, suffix) = match action {
+            ProcessingAction::Center => (ProcessingOperation::Center, "对称".to_owned()),
+            ProcessingAction::CenterNormalize => (
+                ProcessingOperation::CenterNormalize { top_n: 20 },
+                "归一化".to_owned(),
+            ),
+            ProcessingAction::PolynomialBackground {
+                fit_min,
+                fit_max,
+                order,
+            } => (
+                ProcessingOperation::PolynomialBackground {
+                    x_column: self.x_column,
+                    fit_min,
+                    fit_max,
+                    order,
+                },
+                format!("去背底{order}阶"),
+            ),
+            ProcessingAction::LocalFlatten {
+                x1,
+                x2,
+                transition,
+                anchor,
+                strength,
+            } => (
+                ProcessingOperation::LocalFlatten {
+                    x_column: self.x_column,
+                    x1,
+                    x2,
+                    transition,
+                    anchor,
+                    strength,
+                },
+                "局部展平".to_owned(),
+            ),
+            ProcessingAction::Denoise {
+                window_length,
+                polyorder,
+                range,
+            } => (
+                ProcessingOperation::Denoise {
+                    window_length,
+                    polyorder,
+                    range: range.map(|(minimum, maximum)| (self.x_column, minimum, maximum)),
+                },
+                "去噪".to_owned(),
+            ),
+            ProcessingAction::Formula { expression, a, b } => {
+                let a = match fitting::evaluate_constant_expression(&a) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.status = format!("公式系数 a 无效：{}", error.reason);
+                        return;
+                    }
+                };
+                let b = match fitting::evaluate_constant_expression(&b) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.status = format!("公式系数 b 无效：{}", error.reason);
+                        return;
+                    }
+                };
+                (
+                    ProcessingOperation::Formula {
+                        x_column: self.x_column,
+                        expression,
+                        a,
+                        b,
+                    },
+                    "公式".to_owned(),
+                )
+            }
+        };
+        self.apply_processing(operation, &suffix);
     }
 
     fn open_fit_window(&mut self, context: &egui::Context) {
@@ -2825,14 +2521,6 @@ fn unique_column_name(dataset: &data::DataSet, requested: &str) -> String {
         }
     }
     unreachable!()
-}
-
-fn anchor_name(anchor: Anchor) -> &'static str {
-    match anchor {
-        Anchor::Left => "左侧",
-        Anchor::Right => "右侧",
-        Anchor::Center => "中心",
-    }
 }
 
 fn fit_kind_name(kind: FitKind) -> &'static str {

@@ -1,3 +1,5 @@
+use crate::processing::Anchor;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AxisDisplay {
     offset: f64,
@@ -165,6 +167,14 @@ pub(crate) fn split_fit_display_equation(equation: &str) -> (&str, Option<&str>)
         let parameters = equation[index + 2..].trim();
         (formula, (!parameters.is_empty()).then_some(parameters))
     })
+}
+
+pub(crate) fn anchor_name(anchor: Anchor) -> &'static str {
+    match anchor {
+        Anchor::Left => "左侧",
+        Anchor::Right => "右侧",
+        Anchor::Center => "中心",
+    }
 }
 
 #[cfg(test)]
