@@ -18,10 +18,12 @@ use crate::{
     ui::formatting::{
         AxisDisplay, anchor_name, compact_label, legend_series_name, split_fit_display_equation,
     },
+    ui::main_view::{self, MainAction, SidebarAction},
     ui::processing_window::{
         self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
     },
     ui::selection::{sole_selected_index, synchronize_selection},
+    ui::theme::configure_interface_style,
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
     },
@@ -33,8 +35,6 @@ mod screenshot;
 const PLOT_LEFT_GUTTER: f32 = 20.0;
 const PLOT_BOTTOM_GUTTER: f32 = 12.0;
 const PLOT_EXPORT_TOP_GUTTER: f32 = 8.0;
-const STATUS_ROW_HEIGHT: f32 = 22.0;
-const STATUS_BOTTOM_INSET: f32 = 15.0;
 
 struct PendingDeletion {
     dataset_index: usize,
@@ -1393,107 +1393,40 @@ impl eframe::App for InstPlotLiteApp {
             self.load_paths(dropped_paths);
         }
 
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.heading("InstPlot Lite");
-            ui.separator();
-            if ui
-                .button(egui::RichText::new("打开文件").strong())
-                .clicked()
-            {
-                self.open_files();
+        let main_actions = main_view::show_toolbar(
+            ui,
+            !self.datasets.is_empty(),
+            self.history.can_undo(),
+            self.history.can_redo(),
+        );
+        for action in main_actions {
+            match action {
+                MainAction::OpenFiles => self.open_files(),
+                MainAction::ExportImage => self.request_plot_png(ui.ctx()),
+                MainAction::ExportData(format) => self.open_data_export(ui.ctx(), format),
+                MainAction::OpenProcessing => self.open_processing_window(ui.ctx()),
+                MainAction::OpenFitting => self.open_fit_window(ui.ctx()),
+                MainAction::Undo => self.undo(),
+                MainAction::Redo => self.redo(),
             }
-            if ui.button("导出图片").clicked() {
-                self.request_plot_png(ui.ctx());
-            }
-            ui.add_enabled_ui(!self.datasets.is_empty(), |ui| {
-                ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
-                    if ui.button("CSV").clicked() {
-                        ui.close();
-                        self.open_data_export(ui.ctx(), DataExportFormat::Csv);
-                    }
-                    if ui.button("Excel（XLSX）").clicked() {
-                        ui.close();
-                        self.open_data_export(ui.ctx(), DataExportFormat::Xlsx);
-                    }
-                    if ui.button("TSV").clicked() {
-                        ui.close();
-                        self.open_data_export(ui.ctx(), DataExportFormat::Tsv);
-                    }
-                    if ui.button("TXT（制表符分隔）").clicked() {
-                        ui.close();
-                        self.open_data_export(ui.ctx(), DataExportFormat::Txt);
-                    }
-                    if ui.button("DAT（制表符分隔）").clicked() {
-                        ui.close();
-                        self.open_data_export(ui.ctx(), DataExportFormat::Dat);
-                    }
-                });
-            });
-            if ui
-                .add_enabled(
-                    !self.datasets.is_empty(),
-                    egui::Button::new(egui::RichText::new("数据处理").strong()),
-                )
-                .clicked()
-            {
-                self.open_processing_window(ui.ctx());
-            }
-            if ui
-                .add_enabled(
-                    !self.datasets.is_empty(),
-                    egui::Button::new(egui::RichText::new("曲线拟合").strong()),
-                )
-                .clicked()
-            {
-                self.open_fit_window(ui.ctx());
-            }
-            if ui
-                .add_enabled(self.history.can_undo(), egui::Button::new("← 撤销"))
-                .on_hover_text("撤销最近一次删除或数据处理")
-                .clicked()
-            {
-                self.undo();
-            }
-            if ui
-                .add_enabled(self.history.can_redo(), egui::Button::new("重做 →"))
-                .on_hover_text("重新执行刚刚撤销的操作")
-                .clicked()
-            {
-                self.redo();
-            }
-        });
+        }
         #[cfg(any(target_os = "windows", test))]
         self.windows_updater.show_dialog(ui.ctx());
         ui.separator();
         let wide_layout = ui.available_width() >= 820.0;
         let column_names = if wide_layout {
             let sidebar_width = self.desired_sidebar_width(ui);
-            let names = egui::Panel::left("data-controls")
-                .exact_size(sidebar_width)
-                .resizable(false)
-                .show(ui, |ui| {
-                    ui.heading("数据");
-                    ui.separator();
-                    let names = self.show_data_controls(ui, true);
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("复位视图").clicked() {
-                            self.reset_view = true;
-                            self.visible_x_range = None;
-                        }
-                        if ui.button("清空").clicked() {
-                            self.clear_data();
-                        }
-                    });
-                    ui.add_space(14.0);
-                    ui.separator();
-                    ui.label("左键：点选或框选删除");
-                    ui.label("滚轮：缩放");
-                    ui.label("右键拖动：平移");
-                    names
-                })
-                .inner;
+            let (names, sidebar_action) = main_view::show_wide_sidebar(ui, sidebar_width, |ui| {
+                self.show_data_controls(ui, true)
+            });
+            match sidebar_action {
+                SidebarAction::ResetView => {
+                    self.reset_view = true;
+                    self.visible_x_range = None;
+                }
+                SidebarAction::Clear => self.clear_data(),
+                SidebarAction::None => {}
+            }
             egui::Area::new(egui::Id::new("update-and-version-footer"))
                 .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(6.0, -6.0))
                 .order(egui::Order::Foreground)
@@ -1516,16 +1449,16 @@ impl eframe::App for InstPlotLiteApp {
                 });
             names
         } else {
-            let names = self.show_data_controls(ui, false);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("复位视图").clicked() {
+            let (names, sidebar_action) =
+                main_view::show_narrow_controls(ui, |ui| self.show_data_controls(ui, false));
+            match sidebar_action {
+                SidebarAction::ResetView => {
                     self.reset_view = true;
                     self.visible_x_range = None;
                 }
-                if ui.button("清空").clicked() {
-                    self.clear_data();
-                }
-            });
+                SidebarAction::Clear => self.clear_data(),
+                SidebarAction::None => {}
+            }
             ui.horizontal(|ui| {
                 #[cfg(any(target_os = "windows", test))]
                 self.windows_updater.show_toolbar(ui);
@@ -1540,9 +1473,11 @@ impl eframe::App for InstPlotLiteApp {
             names
         };
 
-        let plot_height =
-            (ui.available_height() - PLOT_BOTTOM_GUTTER - STATUS_ROW_HEIGHT - STATUS_BOTTOM_INSET)
-                .max(220.0);
+        let plot_height = (ui.available_height()
+            - PLOT_BOTTOM_GUTTER
+            - main_view::STATUS_ROW_HEIGHT
+            - main_view::STATUS_BOTTOM_INSET)
+            .max(220.0);
         let (plot_x_name, plot_y_name) = plot_coordinate_names(
             &self.datasets,
             self.active_dataset,
@@ -1742,36 +1677,7 @@ impl eframe::App for InstPlotLiteApp {
             plot_row.response.rect.min - egui::vec2(0.0, PLOT_EXPORT_TOP_GUTTER),
             plot_row.response.rect.max + egui::vec2(0.0, PLOT_BOTTOM_GUTTER),
         ));
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), STATUS_ROW_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Min),
-            |ui| {
-                ui.spacing_mut().interact_size.y = 20.0;
-                let coordinate = self.selected_coordinate.map(|[x, y]| format!("({x}, {y})"));
-                let reserved_width = coordinate.as_ref().map_or(0.0, |text| {
-                    let font_id = egui::TextStyle::Body.resolve(ui.style());
-                    ui.painter()
-                        .layout_no_wrap(text.clone(), font_id, ui.visuals().text_color())
-                        .size()
-                        .x
-                        + 26.0
-                });
-                let status_width = (ui.available_width() - reserved_width).max(0.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(status_width, 20.0),
-                    egui::Layout::left_to_right(egui::Align::Min),
-                    |ui| {
-                        ui.add(egui::Label::new(&self.status).truncate())
-                            .on_hover_text(&self.status);
-                    },
-                );
-                if let Some(coordinate) = coordinate {
-                    ui.separator();
-                    ui.label(coordinate);
-                }
-            },
-        );
-        ui.add_space(STATUS_BOTTOM_INSET);
+        main_view::show_status(ui, &self.status, self.selected_coordinate);
         let response = plot_row.inner;
         self.last_plot_rect = Some(response.response.rect);
         let bounds = response.transform.bounds();
@@ -2008,52 +1914,6 @@ fn reset_plot_bounds_preserving_visibility(context: &egui::Context, plot_id: egu
     true
 }
 
-fn configure_interface_style(context: &egui::Context) {
-    // InstPlot Lite is designed as a dark interface. Following the operating
-    // system theme here can mix light panels with explicitly dark plot chrome,
-    // which also makes labels unreadable on Windows in light mode. Native title
-    // bars remain under operating-system control.
-    context.options_mut(|options| options.sync_window_theme = false);
-    context.set_theme(egui::Theme::Dark);
-    context.all_styles_mut(|style| {
-        use egui::{FontFamily, FontId, TextStyle};
-
-        style.text_styles.insert(
-            TextStyle::Small,
-            FontId::new(14.0, FontFamily::Proportional),
-        );
-        style
-            .text_styles
-            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
-        style.text_styles.insert(
-            TextStyle::Button,
-            FontId::new(15.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            TextStyle::Monospace,
-            FontId::new(14.0, FontFamily::Monospace),
-        );
-        style.text_styles.insert(
-            TextStyle::Heading,
-            FontId::new(22.0, FontFamily::Proportional),
-        );
-        style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        style.spacing.interact_size.y = 32.0;
-        style.spacing.scroll = egui::style::ScrollStyle::thin();
-        style.visuals.selection.bg_fill = Color32::from_gray(78);
-        style.visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
-        style.visuals.hyperlink_color = Color32::from_gray(210);
-        style.visuals.warn_fg_color = Color32::from_gray(220);
-        style.visuals.error_fg_color = Color32::WHITE;
-        let radius = egui::CornerRadius::same(8);
-        style.visuals.widgets.inactive.corner_radius = radius;
-        style.visuals.widgets.hovered.corner_radius = radius;
-        style.visuals.widgets.active.corner_radius = radius;
-        style.visuals.widgets.open.corner_radius = radius;
-        style.visuals.window_corner_radius = egui::CornerRadius::same(10);
-    });
-}
-
 fn unique_column_name(dataset: &data::DataSet, requested: &str) -> String {
     if !dataset
         .columns
@@ -2263,27 +2123,15 @@ fn fit_overlay_matches_coordinates(
 #[cfg(test)]
 mod tests {
     use super::{
-        FitOverlay, FitScope, FitTarget, configure_interface_style, data_curve_series_id,
-        dataset_plot_columns, demo_curve, fit_dataset_indices, fit_overlay_matches_coordinates,
-        is_inside_range, plot_coordinate_names, reset_plot_bounds_preserving_visibility,
-        store_fit_overlay, store_fit_overlays, wheel_zoom_factor,
+        FitOverlay, FitScope, FitTarget, data_curve_series_id, dataset_plot_columns, demo_curve,
+        fit_dataset_indices, fit_overlay_matches_coordinates, is_inside_range,
+        plot_coordinate_names, reset_plot_bounds_preserving_visibility, store_fit_overlay,
+        store_fit_overlays, wheel_zoom_factor,
     };
     use crate::data::{DataSet, DataSetKind, FitLink, NumericColumn};
     use eframe::egui;
     use egui_plot::{Line, Plot, PlotMemory};
     use std::path::PathBuf;
-
-    #[test]
-    fn interface_style_always_uses_dark_theme() {
-        let context = egui::Context::default();
-        context.set_theme(egui::Theme::Light);
-
-        configure_interface_style(&context);
-
-        assert_eq!(context.theme(), egui::Theme::Dark);
-        assert!(context.global_style().visuals.dark_mode);
-        assert!(!context.options(|options| options.sync_window_theme));
-    }
 
     #[test]
     fn mouse_wheel_zoom_uses_conventional_direction() {
