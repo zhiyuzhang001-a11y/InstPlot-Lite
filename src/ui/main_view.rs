@@ -2,7 +2,7 @@ use eframe::egui;
 
 use super::{
     export_window::DataExportFormat,
-    theme::{SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS},
+    theme::{PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, shell_scope},
 };
 
 pub const STATUS_ROW_HEIGHT: f32 = 22.0;
@@ -33,80 +33,84 @@ pub fn show_toolbar(
     can_redo: bool,
 ) -> Vec<MainAction> {
     let mut actions = Vec::new();
-    ui.add_space(SPACE_XS);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("InstPlot Lite").size(18.0).strong());
-        ui.add_space(SPACE_XS);
-        ui.separator();
-        ui.add_space(SPACE_XS);
+    egui::Frame::NONE.fill(SHELL_BG).show(ui, |ui| {
+        shell_scope(ui, |ui| {
+            ui.add_space(SPACE_XS);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("InstPlot Lite").size(18.0).strong());
+                ui.add_space(SPACE_XS);
+                ui.separator();
+                ui.add_space(SPACE_XS);
 
-        if ui
-            .button(egui::RichText::new("打开文件").strong())
-            .clicked()
-        {
-            actions.push(MainAction::OpenFiles);
-        }
-        if ui.button("导出图片").clicked() {
-            actions.push(MainAction::ExportImage);
-        }
-        ui.add_enabled_ui(has_data, |ui| {
-            ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
-                for (label, format) in [
-                    ("CSV", DataExportFormat::Csv),
-                    ("Excel（XLSX）", DataExportFormat::Xlsx),
-                    ("TSV", DataExportFormat::Tsv),
-                    ("TXT（制表符分隔）", DataExportFormat::Txt),
-                    ("DAT（制表符分隔）", DataExportFormat::Dat),
-                ] {
-                    if ui.button(label).clicked() {
-                        ui.close();
-                        actions.push(MainAction::ExportData(format));
-                    }
+                if ui
+                    .button(egui::RichText::new("打开文件").strong())
+                    .clicked()
+                {
+                    actions.push(MainAction::OpenFiles);
+                }
+                if ui.button("导出图片").clicked() {
+                    actions.push(MainAction::ExportImage);
+                }
+                ui.add_enabled_ui(has_data, |ui| {
+                    ui.menu_button(egui::RichText::new("导出数据…").strong(), |ui| {
+                        for (label, format) in [
+                            ("CSV", DataExportFormat::Csv),
+                            ("Excel（XLSX）", DataExportFormat::Xlsx),
+                            ("TSV", DataExportFormat::Tsv),
+                            ("TXT（制表符分隔）", DataExportFormat::Txt),
+                            ("DAT（制表符分隔）", DataExportFormat::Dat),
+                        ] {
+                            if ui.button(label).clicked() {
+                                ui.close();
+                                actions.push(MainAction::ExportData(format));
+                            }
+                        }
+                    });
+                });
+
+                ui.add_space(SPACE_XS);
+                ui.separator();
+                ui.add_space(SPACE_XS);
+
+                if ui
+                    .add_enabled(
+                        has_data,
+                        egui::Button::new(egui::RichText::new("数据处理").strong()),
+                    )
+                    .clicked()
+                {
+                    actions.push(MainAction::OpenProcessing);
+                }
+                if ui
+                    .add_enabled(
+                        has_data,
+                        egui::Button::new(egui::RichText::new("曲线拟合").strong()),
+                    )
+                    .clicked()
+                {
+                    actions.push(MainAction::OpenFitting);
+                }
+
+                ui.add_space(SPACE_XS);
+                ui.separator();
+                ui.add_space(SPACE_XS);
+
+                if ui
+                    .add_enabled(can_undo, egui::Button::new("← 撤销"))
+                    .on_hover_text("撤销最近一次删除或数据处理")
+                    .clicked()
+                {
+                    actions.push(MainAction::Undo);
+                }
+                if ui
+                    .add_enabled(can_redo, egui::Button::new("重做 →"))
+                    .on_hover_text("重新执行刚刚撤销的操作")
+                    .clicked()
+                {
+                    actions.push(MainAction::Redo);
                 }
             });
         });
-
-        ui.add_space(SPACE_XS);
-        ui.separator();
-        ui.add_space(SPACE_XS);
-
-        if ui
-            .add_enabled(
-                has_data,
-                egui::Button::new(egui::RichText::new("数据处理").strong()),
-            )
-            .clicked()
-        {
-            actions.push(MainAction::OpenProcessing);
-        }
-        if ui
-            .add_enabled(
-                has_data,
-                egui::Button::new(egui::RichText::new("曲线拟合").strong()),
-            )
-            .clicked()
-        {
-            actions.push(MainAction::OpenFitting);
-        }
-
-        ui.add_space(SPACE_XS);
-        ui.separator();
-        ui.add_space(SPACE_XS);
-
-        if ui
-            .add_enabled(can_undo, egui::Button::new("← 撤销"))
-            .on_hover_text("撤销最近一次删除或数据处理")
-            .clicked()
-        {
-            actions.push(MainAction::Undo);
-        }
-        if ui
-            .add_enabled(can_redo, egui::Button::new("重做 →"))
-            .on_hover_text("重新执行刚刚撤销的操作")
-            .clicked()
-        {
-            actions.push(MainAction::Redo);
-        }
     });
     actions
 }
@@ -118,30 +122,33 @@ pub fn show_wide_sidebar<R>(
 ) -> (R, SidebarAction) {
     let mut action = SidebarAction::None;
     let frame = egui::Frame::side_top_panel(ui.style())
+        .fill(PANEL_BG)
         .inner_margin(egui::Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8));
     let value = egui::Panel::left("data-controls")
         .exact_size(width)
         .resizable(false)
         .frame(frame)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("数据").size(18.0).strong());
-            ui.separator();
-            let value = show_data_controls(ui);
-            ui.add_space(SPACE_MD);
-            ui.horizontal(|ui| {
-                if ui.button("复位视图").clicked() {
-                    action = SidebarAction::ResetView;
-                }
-                if ui.button("清空").clicked() {
-                    action = SidebarAction::Clear;
-                }
-            });
-            ui.add_space(SPACE_LG);
-            ui.separator();
-            ui.weak("左键：点选或框选删除");
-            ui.weak("滚轮：缩放");
-            ui.weak("右键拖动：平移");
-            value
+            shell_scope(ui, |ui| {
+                ui.label(egui::RichText::new("数据").size(18.0).strong());
+                ui.separator();
+                let value = show_data_controls(ui);
+                ui.add_space(SPACE_MD);
+                ui.horizontal(|ui| {
+                    if ui.button("复位视图").clicked() {
+                        action = SidebarAction::ResetView;
+                    }
+                    if ui.button("清空").clicked() {
+                        action = SidebarAction::Clear;
+                    }
+                });
+                ui.add_space(SPACE_LG);
+                ui.separator();
+                ui.weak("左键：点选或框选删除");
+                ui.weak("滚轮：缩放");
+                ui.weak("右键拖动：平移");
+                value
+            })
         })
         .inner;
     (value, action)

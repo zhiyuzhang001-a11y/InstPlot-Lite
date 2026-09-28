@@ -22,7 +22,7 @@ use crate::{
         self, ProcessingAction, ProcessingResultMode, ProcessingScope, ProcessingSettings,
     },
     ui::selection::{sole_selected_index, synchronize_selection},
-    ui::theme::{SPACE_SM, SPACE_XS, configure_interface_style},
+    ui::theme::{PANEL_BG, SPACE_SM, SPACE_XS, configure_interface_style},
     ui::tool_window::{
         export_viewport_id, fitting_viewport_id, focus_viewport, processing_viewport_id,
     },
@@ -1427,7 +1427,7 @@ impl eframe::App for InstPlotLiteApp {
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::NONE
-                        .fill(ui.visuals().panel_fill)
+                        .fill(PANEL_BG)
                         .inner_margin(egui::Margin::symmetric(SPACE_XS as i8, SPACE_XS as i8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
