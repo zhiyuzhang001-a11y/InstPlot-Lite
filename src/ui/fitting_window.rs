@@ -1,6 +1,9 @@
 use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 
-use super::theme::{CONTROL_RADIUS, SPACE_MD, SPACE_SM, SPACE_XS};
+use super::formatting::compact_label;
+use super::theme::{
+    FG_DANGER, FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_MD, SPACE_SM, SPACE_XS,
+};
 use super::tool_window::{
     apply_tool_window_surface, fitting_viewport_id, show_embedded_window_close_control,
     show_tool_viewport,
@@ -136,14 +139,19 @@ pub(crate) fn show(
                 .scroll_source(egui::scroll_area::ScrollSource::ALL)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_space(SPACE_MD);
-                    ui.indent("fit-content", |ui| {
-                        ui.spacing_mut().item_spacing.y = SPACE_MD;
-                        ui.label(
+                    let available_width = ui.available_width();
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin::same(SPACE_MD as i8))
+                        .show(ui, |ui| {
+                        ui.set_min_width((available_width - 2.0 * SPACE_MD).max(0.0));
+                        ui.spacing_mut().item_spacing.y = SPACE_SM;
+                        section_heading(ui, "拟合目标");
+                        secondary_text(
+                            ui,
                             "使用当前 X/Y 列进行拟合；已删除和非数值数据点不会参与计算。",
                         );
-                        ui.separator();
-                        ui.small(
+                        secondary_text(
+                            ui,
                             "同一数据集的同一组 X/Y 重新拟合时，会更新原拟合曲线；其他曲线的拟合结果会保留。",
                         );
                         ui.horizontal(|ui| {
@@ -162,23 +170,28 @@ pub(crate) fn show(
                         if settings.scope == FitScope::Current {
                             ui.horizontal(|ui| {
                                 ui.label("当前曲线：");
-                                egui::ComboBox::from_id_salt("fit-dataset")
+                                let response = egui::ComboBox::from_id_salt("fit-dataset")
                                     .width(300.0)
                                     .selected_text(
                                         dataset_names
                                             .get(selected_dataset)
-                                            .map(String::as_str)
-                                            .unwrap_or("未选择"),
+                                            .map(|name| compact_label(name, 28))
+                                            .unwrap_or_else(|| "未选择".to_owned()),
                                     )
                                     .show_ui(ui, |ui| {
                                         for (index, name) in dataset_names.iter().enumerate() {
                                             ui.selectable_value(
                                                 &mut selected_dataset,
                                                 index,
-                                                name,
-                                            );
+                                                compact_label(name, 48),
+                                            )
+                                            .on_hover_text(name);
                                         }
-                                    });
+                                    })
+                                    .response;
+                                if let Some(name) = dataset_names.get(selected_dataset) {
+                                    response.on_hover_text(name);
+                                }
                             });
                         } else {
                             ui.horizontal(|ui| {
@@ -190,9 +203,14 @@ pub(crate) fn show(
                                 }
                             });
                             for (index, name) in dataset_names.iter().enumerate() {
-                                ui.checkbox(&mut settings.selected_datasets[index], name);
+                                ui.checkbox(
+                                    &mut settings.selected_datasets[index],
+                                    compact_label(name, 48),
+                                )
+                                .on_hover_text(name);
                             }
-                            ui.small(
+                            secondary_text(
+                                ui,
                                 "所选曲线将分别拟合，不会合并数据点；使用当前 X/Y 列名匹配其他曲线。",
                             );
                         }
@@ -225,6 +243,8 @@ pub(crate) fn show(
                                 settings.use_x_range,
                                 egui::DragValue::new(&mut settings.x_max),
                             );
+                        });
+                        ui.horizontal(|ui| {
                             ui.checkbox(&mut settings.use_y_range, "限制 Y");
                             ui.add_enabled(
                                 settings.use_y_range,
@@ -236,7 +256,7 @@ pub(crate) fn show(
                                 egui::DragValue::new(&mut settings.y_max),
                             );
                         });
-                        ui.separator();
+                        begin_section(ui, "拟合模型");
                         ui.horizontal(|ui| {
                             ui.label("拟合类型");
                             egui::ComboBox::from_id_salt("fit-kind")
@@ -278,17 +298,19 @@ pub(crate) fn show(
                                 &mut settings.initial_parameters,
                                 "例如：1, 10/11, (2+3)/7",
                             );
-                            ui.small(
+                            secondary_text(
+                                ui,
                                 "参数按 a、b、c、d、e_param、f、g、h 的顺序填写，用逗号分隔；每项可用分数和括号。",
                             );
-                            ui.small(
+                            secondary_text(
+                                ui,
                                 "支持 + - * / ^、sin、cos、tan、exp、ln/log、sqrt、abs。",
                             );
                         }
-                        ui.separator();
+                        begin_section(ui, "执行与结果");
                         ui.horizontal(|ui| {
                             if ui
-                                .button(egui::RichText::new("执行拟合").strong())
+                                .add(primary_action_button("执行拟合"))
                                 .clicked()
                             {
                                 action = FitAction::Execute;
@@ -296,7 +318,7 @@ pub(crate) fn show(
                             if ui
                                 .add_enabled(
                                     has_fit_results,
-                                    egui::Button::new("清除全部拟合曲线"),
+                                    clear_fit_button("清除全部拟合曲线"),
                                 )
                                 .clicked()
                             {
@@ -304,9 +326,18 @@ pub(crate) fn show(
                             }
                         });
                         ui.add_space(SPACE_SM);
-                        ui.label(&settings.message);
+                        egui::Frame::NONE
+                            .fill(PANEL_BG)
+                            .inner_margin(egui::Margin::same(SPACE_SM as i8))
+                            .show(ui, |ui| {
+                                for (index, line) in settings.message.lines().enumerate() {
+                                    if index > 0 {
+                                        ui.add_space(SPACE_SM);
+                                    }
+                                    ui.add(egui::Label::new(line).wrap());
+                                }
+                            });
                     });
-                    ui.add_space(SPACE_MD);
                 });
         },
     );
@@ -335,36 +366,42 @@ fn editable_fit_field(
     value: &mut String,
     hint: &str,
 ) {
-    let accent = egui::Color32::from_gray(132);
-    egui::Frame::new()
-        .fill(egui::Color32::from_gray(31))
-        .stroke(egui::Stroke::new(1.5, accent))
-        .corner_radius(egui::CornerRadius::same(CONTROL_RADIUS))
-        .inner_margin(egui::Margin::same(SPACE_MD as i8))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(title)
-                    .strong()
-                    .color(egui::Color32::from_gray(232)),
-            );
-            ui.add_space(SPACE_XS);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(prefix).strong());
-                ui.scope(|ui| {
-                    ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::from_gray(56);
-                    ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.2, accent);
-                    ui.visuals_mut().widgets.hovered.bg_stroke =
-                        egui::Stroke::new(1.8, egui::Color32::from_gray(184));
-                    ui.visuals_mut().widgets.active.bg_stroke =
-                        egui::Stroke::new(2.0, egui::Color32::WHITE);
-                    let width = ui.available_width().max(180.0);
-                    ui.add_sized(
-                        [width, 34.0],
-                        egui::TextEdit::singleline(value).hint_text(hint),
-                    );
-                });
-            });
-        });
+    ui.label(egui::RichText::new(title).strong());
+    ui.add_space(SPACE_XS);
+    ui.label(egui::RichText::new(prefix).color(FG_SECONDARY));
+    ui.add(
+        egui::TextEdit::multiline(value)
+            .desired_width(f32::INFINITY)
+            .desired_rows(2)
+            .hint_text(hint),
+    );
+}
+
+fn section_heading(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).strong());
+}
+
+fn begin_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(SPACE_MD);
+    ui.separator();
+    ui.add_space(SPACE_XS);
+    section_heading(ui, title);
+}
+
+fn secondary_text(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).color(FG_SECONDARY));
+}
+
+fn primary_action_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(label).strong().color(SHELL_BG))
+        .fill(FG_PRIMARY)
+        .stroke(egui::Stroke::NONE)
+}
+
+fn clear_fit_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(egui::RichText::new(label).color(FG_DANGER))
+        .fill(PANEL_BG)
+        .stroke(egui::Stroke::NONE)
 }
 
 fn unit_conversion_name(conversion: XUnitConversion) -> &'static str {
