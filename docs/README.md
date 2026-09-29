@@ -12,9 +12,14 @@
 ## 开发与维护
 
 - [源码构建与实现说明](DEVELOPMENT.md)
+- [代码整合建议](CODE_CONSOLIDATION_PLAN.md)
+- [代码整合执行计划](CODE_CONSOLIDATION_EXECUTION.md)
+- [UI 改造计划](UI_REDESIGN_PLAN.md)
+- [UI 改造执行计划](UI_REDESIGN_EXECUTION.md)
 - [功能范围](SCOPE.md)
 - [当前实现状态](STATUS.md)
 - [安装包构建与卸载](../packaging/README.md)
+- [v0.3.8 Release Notes](RELEASE_NOTES_v0.3.8.md)
 - [v0.3.7 Release Notes](RELEASE_NOTES_v0.3.7.md)
 - [v0.3.6 Release Notes](RELEASE_NOTES_v0.3.6.md)
 - [v0.3.5 Release Notes](RELEASE_NOTES_v0.3.5.md)

@@ -8,6 +8,8 @@ mod fitting;
 mod fonts;
 mod image_export;
 mod processing;
+mod session;
+mod ui;
 #[cfg(any(target_os = "windows", test))]
 mod updater;
 

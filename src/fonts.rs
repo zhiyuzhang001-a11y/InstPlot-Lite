@@ -22,14 +22,16 @@ fn font_definitions(cjk_bytes: Vec<u8>, latin_bytes: &'static [u8]) -> egui::Fon
         Arc::new(egui::FontData::from_owned(cjk_bytes)),
     );
 
-    // Use the bundled Arial-compatible face for interface text, then fall
-    // through to the bundled Chinese subset for glyphs it does not contain.
+    // Keep Chinese, Latin letters, and digits on one set of font metrics so
+    // mixed-language labels share a visual baseline. The bundled CJK subset
+    // includes Basic Latin; the compact Latin face remains a fallback for any
+    // glyphs outside that subset.
     let proportional = definitions
         .families
         .entry(FontFamily::Proportional)
         .or_default();
-    proportional.insert(0, "instplot-latin".to_owned());
-    proportional.push("instplot-cjk".to_owned());
+    proportional.insert(0, "instplot-cjk".to_owned());
+    proportional.push("instplot-latin".to_owned());
 
     // Preserve egui's actual monospace face for numeric/function editing.
     definitions
@@ -68,16 +70,16 @@ mod tests {
     }
 
     #[test]
-    fn bundled_latin_is_primary_and_cjk_is_fallback() {
+    fn bundled_cjk_is_primary_for_consistent_mixed_text_metrics() {
         let definitions = font_definitions(BUNDLED_CJK_FONT.to_vec(), BUNDLED_LATIN_FONT);
         let proportional = &definitions.families[&FontFamily::Proportional];
         assert_eq!(
             proportional.first().map(String::as_str),
-            Some("instplot-latin")
+            Some("instplot-cjk")
         );
         assert_eq!(
             proportional.last().map(String::as_str),
-            Some("instplot-cjk")
+            Some("instplot-latin")
         );
 
         let monospace = &definitions.families[&FontFamily::Monospace];

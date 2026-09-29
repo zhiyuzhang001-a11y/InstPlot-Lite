@@ -1,0 +1,11 @@
+pub(crate) mod delete_confirmation;
+pub(crate) mod export_window;
+pub(crate) mod fitting_window;
+pub(crate) mod formatting;
+pub(crate) mod main_view;
+pub(crate) mod plot_series;
+pub(crate) mod plot_view;
+pub(crate) mod processing_window;
+pub(crate) mod selection;
+pub(crate) mod theme;
+pub(crate) mod tool_window;
