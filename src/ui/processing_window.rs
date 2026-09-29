@@ -4,7 +4,7 @@ use crate::processing::Anchor;
 
 use super::{
     formatting::{anchor_name, compact_label},
-    theme::{CONTROL_BG, FG_SECONDARY, SPACE_MD, SPACE_SM},
+    theme::{FG_SECONDARY, SPACE_MD, SPACE_SM, ShellButtonStyle, shell_button},
     tool_window::{
         apply_tool_window_surface, processing_viewport_id, show_embedded_window_close_control,
         show_tool_viewport,
@@ -229,10 +229,14 @@ pub(crate) fn show(
                         );
                         begin_section(ui, "基础处理");
                         ui.horizontal(|ui| {
-                            if ui.add(action_button("对称处理")).clicked() {
+                            if shell_button(ui, "对称处理", ShellButtonStyle::SecondaryStrong)
+                                .clicked()
+                            {
                                 requested = Some(ProcessingAction::Center);
                             }
-                            if ui.add(action_button("归一化")).clicked() {
+                            if shell_button(ui, "归一化", ShellButtonStyle::SecondaryStrong)
+                                .clicked()
+                            {
                                 requested = Some(ProcessingAction::CenterNormalize);
                             }
                         });
@@ -251,7 +255,7 @@ pub(crate) fn show(
                             ui.add(
                                 egui::DragValue::new(&mut settings.background_order).range(0..=5),
                             );
-                            if ui.add(action_button("执行")).clicked() {
+                            if shell_button(ui, "执行", ShellButtonStyle::SecondaryStrong).clicked() {
                                 requested = Some(ProcessingAction::PolynomialBackground {
                                     fit_min: settings.fit_min,
                                     fit_max: settings.fit_max,
@@ -298,8 +302,7 @@ pub(crate) fn show(
                                 egui::Slider::new(&mut settings.local_strength, 0.0..=1.0)
                                     .show_value(true),
                             );
-                            if ui
-                                .add(action_button("执行"))
+                            if shell_button(ui, "执行", ShellButtonStyle::SecondaryStrong)
                                 .on_hover_text("按上方结果写入方式应用局部展平")
                                 .clicked()
                             {
@@ -335,7 +338,7 @@ pub(crate) fn show(
                                 ui.add(egui::DragValue::new(&mut settings.denoise_max));
                             });
                         }
-                        if ui.add(action_button("执行去噪")).clicked()
+                        if shell_button(ui, "执行去噪", ShellButtonStyle::SecondaryStrong).clicked()
                         {
                             requested = Some(ProcessingAction::Denoise {
                                 window_length: settings.denoise_window,
@@ -384,8 +387,7 @@ pub(crate) fn show(
                                     .desired_width(95.0)
                                     .hint_text("例如：(2+3)/7"),
                             );
-                            if ui
-                                .add(action_button("执行公式"))
+                            if shell_button(ui, "执行公式", ShellButtonStyle::SecondaryStrong)
                                 .on_hover_text(
                                     "根据公式中的 x 或 y，按上方结果写入方式应用公式",
                                 )
@@ -427,10 +429,4 @@ fn begin_section(ui: &mut egui::Ui, title: &str) {
 
 fn secondary_text(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(FG_SECONDARY));
-}
-
-fn action_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(label).strong())
-        .fill(CONTROL_BG)
-        .stroke(egui::Stroke::NONE)
 }

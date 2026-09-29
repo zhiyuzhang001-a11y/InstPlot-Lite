@@ -3,7 +3,10 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 use super::{
     formatting::compact_label,
     selection::sole_selected_index,
-    theme::{FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD, SPACE_SM},
+    theme::{
+        FG_SECONDARY, PANEL_BG, SPACE_LG, SPACE_MD, SPACE_SM, ShellButtonStyle,
+        shell_button_enabled,
+    },
     tool_window::{
         apply_tool_window_surface, export_viewport_id, show_embedded_window_close_control,
         show_tool_viewport,
@@ -262,10 +265,14 @@ pub(crate) fn show(
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(summary).color(FG_SECONDARY));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add_enabled(can_export, primary_export_button())
-                                .on_disabled_hover_text(export_disabled_reason(sole, minimum))
-                                .clicked()
+                            if shell_button_enabled(
+                                ui,
+                                can_export,
+                                "导出",
+                                ShellButtonStyle::Primary,
+                            )
+                            .on_disabled_hover_text(export_disabled_reason(sole, minimum))
+                            .clicked()
                             {
                                 export = true;
                             }
@@ -294,12 +301,6 @@ fn selected_dataset_count(settings: &ExportSelection) -> usize {
         .iter()
         .filter(|selected| **selected)
         .count()
-}
-
-fn primary_export_button() -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new("导出").strong().color(SHELL_BG))
-        .fill(FG_PRIMARY)
-        .stroke(egui::Stroke::NONE)
 }
 
 fn export_disabled_reason(sole: Option<usize>, minimum: usize) -> &'static str {

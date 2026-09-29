@@ -3,8 +3,8 @@ use eframe::egui;
 use super::{
     export_window::DataExportFormat,
     theme::{
-        CONTROL_BG, FG_DANGER, FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD,
-        SPACE_SM, SPACE_XS, shell_scope,
+        FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, ShellButtonStyle,
+        shell_button, shell_button_enabled, shell_scope,
     },
 };
 
@@ -105,14 +105,7 @@ fn show_app_name(ui: &mut egui::Ui) {
 }
 
 fn show_file_actions(ui: &mut egui::Ui, has_data: bool, actions: &mut Vec<MainAction>) {
-    if ui
-        .add(
-            egui::Button::new(egui::RichText::new("打开文件").strong().color(SHELL_BG))
-                .fill(FG_PRIMARY)
-                .stroke(egui::Stroke::NONE),
-        )
-        .clicked()
-    {
+    if shell_button(ui, "打开文件", ShellButtonStyle::Primary).clicked() {
         actions.push(MainAction::OpenFiles);
     }
     if toolbar_button(ui, "导出图片").clicked() {
@@ -137,16 +130,10 @@ fn show_file_actions(ui: &mut egui::Ui, has_data: bool, actions: &mut Vec<MainAc
 }
 
 fn show_analysis_actions(ui: &mut egui::Ui, has_data: bool, actions: &mut Vec<MainAction>) {
-    if ui
-        .add_enabled(has_data, toolbar_button_widget("数据处理"))
-        .clicked()
-    {
+    if shell_button_enabled(ui, has_data, "数据处理", ShellButtonStyle::Toolbar).clicked() {
         actions.push(MainAction::OpenProcessing);
     }
-    if ui
-        .add_enabled(has_data, toolbar_button_widget("曲线拟合"))
-        .clicked()
-    {
+    if shell_button_enabled(ui, has_data, "曲线拟合", ShellButtonStyle::Toolbar).clicked() {
         actions.push(MainAction::OpenFitting);
     }
 }
@@ -157,15 +144,13 @@ fn show_history_actions(
     can_redo: bool,
     actions: &mut Vec<MainAction>,
 ) {
-    if ui
-        .add_enabled(can_undo, history_button_widget("← 撤销"))
+    if shell_button_enabled(ui, can_undo, "← 撤销", ShellButtonStyle::History)
         .on_hover_text("撤销最近一次删除或数据处理")
         .clicked()
     {
         actions.push(MainAction::Undo);
     }
-    if ui
-        .add_enabled(can_redo, history_button_widget("重做 →"))
+    if shell_button_enabled(ui, can_redo, "重做 →", ShellButtonStyle::History)
         .on_hover_text("重新执行刚刚撤销的操作")
         .clicked()
     {
@@ -174,19 +159,7 @@ fn show_history_actions(
 }
 
 fn toolbar_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(toolbar_button_widget(label))
-}
-
-fn toolbar_button_widget(label: &str) -> egui::Button<'_> {
-    egui::Button::new(label)
-        .fill(PANEL_BG)
-        .stroke(egui::Stroke::NONE)
-}
-
-fn history_button_widget(label: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(label).color(FG_SECONDARY))
-        .fill(SHELL_BG)
-        .stroke(egui::Stroke::NONE)
+    shell_button(ui, label, ShellButtonStyle::Toolbar)
 }
 
 pub fn show_wide_sidebar<R>(
@@ -211,10 +184,10 @@ pub fn show_wide_sidebar<R>(
                 let value = show_data_controls(ui);
                 ui.add_space(SPACE_LG);
                 ui.horizontal(|ui| {
-                    if ui.add(sidebar_button("复位视图")).clicked() {
+                    if shell_button(ui, "复位视图", ShellButtonStyle::Secondary).clicked() {
                         action = SidebarAction::ResetView;
                     }
-                    if ui.add(clear_button("清空")).clicked() {
+                    if shell_button(ui, "清空", ShellButtonStyle::Destructive).clicked() {
                         action = SidebarAction::Clear;
                     }
                 });
@@ -239,10 +212,10 @@ pub fn show_narrow_controls<R>(
     let value = show_data_controls(ui);
     ui.add_space(SPACE_SM);
     ui.horizontal_wrapped(|ui| {
-        if ui.add(sidebar_button("复位视图")).clicked() {
+        if shell_button(ui, "复位视图", ShellButtonStyle::Secondary).clicked() {
             action = SidebarAction::ResetView;
         }
-        if ui.add(clear_button("清空")).clicked() {
+        if shell_button(ui, "清空", ShellButtonStyle::Destructive).clicked() {
             action = SidebarAction::Clear;
         }
     });
@@ -264,18 +237,6 @@ pub fn show_narrow_data_region<R>(
             })
         })
         .inner
-}
-
-fn sidebar_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(label)
-        .fill(CONTROL_BG)
-        .stroke(egui::Stroke::NONE)
-}
-
-fn clear_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(label).color(FG_DANGER))
-        .fill(PANEL_BG)
-        .stroke(egui::Stroke::NONE)
 }
 
 pub fn show_status(ui: &mut egui::Ui, status: &str, coordinate: Option<[f64; 2]>) {

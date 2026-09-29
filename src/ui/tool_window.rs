@@ -1,6 +1,8 @@
 use eframe::egui;
 
-use super::theme::{CONTROL_BG, PANEL_BG, SPACE_MD, SPACE_SM, apply_shell_style};
+use super::theme::{
+    PANEL_BG, SPACE_MD, SPACE_SM, ShellButtonStyle, apply_shell_style, shell_button,
+};
 
 pub(crate) fn processing_viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("instplot-lite-processing")
@@ -68,12 +70,7 @@ pub(crate) fn show_embedded_window_close_control(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close_clicked = ui
-                        .add(
-                            egui::Button::new("关闭")
-                                .fill(CONTROL_BG)
-                                .stroke(egui::Stroke::NONE),
-                        )
+                    close_clicked = shell_button(ui, "关闭", ShellButtonStyle::Secondary)
                         .on_hover_text("关闭此窗口（Esc）")
                         .clicked();
                 });

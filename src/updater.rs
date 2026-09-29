@@ -172,13 +172,14 @@ impl WindowsUpdater {
                 | UpdateState::Error(_)
         );
         let response = ui
-            .add(
-                egui::Label::new(
+            .add_enabled(
+                enabled,
+                egui::Button::new(
                     egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                         .small()
                         .weak(),
                 )
-                .sense(egui::Sense::click()),
+                .frame(false),
             )
             .on_hover_text(if enabled {
                 "点击检查更新"

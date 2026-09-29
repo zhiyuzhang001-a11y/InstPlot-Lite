@@ -2,7 +2,8 @@ use eframe::egui::{self, containers::scroll_area::ScrollBarVisibility};
 
 use super::formatting::compact_label;
 use super::theme::{
-    FG_DANGER, FG_PRIMARY, FG_SECONDARY, PANEL_BG, SHELL_BG, SPACE_MD, SPACE_SM, SPACE_XS,
+    FG_SECONDARY, PANEL_BG, SPACE_MD, SPACE_SM, SPACE_XS, ShellButtonStyle, shell_button,
+    shell_button_enabled,
 };
 use super::tool_window::{
     apply_tool_window_surface, fitting_viewport_id, show_embedded_window_close_control,
@@ -309,17 +310,15 @@ pub(crate) fn show(
                         }
                         begin_section(ui, "执行与结果");
                         ui.horizontal(|ui| {
-                            if ui
-                                .add(primary_action_button("执行拟合"))
-                                .clicked()
-                            {
+                            if shell_button(ui, "执行拟合", ShellButtonStyle::Primary).clicked() {
                                 action = FitAction::Execute;
                             }
-                            if ui
-                                .add_enabled(
-                                    has_fit_results,
-                                    clear_fit_button("清除全部拟合曲线"),
-                                )
+                            if shell_button_enabled(
+                                ui,
+                                has_fit_results,
+                                "清除全部拟合曲线",
+                                ShellButtonStyle::Destructive,
+                            )
                                 .clicked()
                             {
                                 action = FitAction::Clear;
@@ -390,18 +389,6 @@ fn begin_section(ui: &mut egui::Ui, title: &str) {
 
 fn secondary_text(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(FG_SECONDARY));
-}
-
-fn primary_action_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(label).strong().color(SHELL_BG))
-        .fill(FG_PRIMARY)
-        .stroke(egui::Stroke::NONE)
-}
-
-fn clear_fit_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(egui::RichText::new(label).color(FG_DANGER))
-        .fill(PANEL_BG)
-        .stroke(egui::Stroke::NONE)
 }
 
 fn unit_conversion_name(conversion: XUnitConversion) -> &'static str {

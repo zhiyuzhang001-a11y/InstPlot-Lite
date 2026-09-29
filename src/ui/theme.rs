@@ -25,6 +25,107 @@ pub(crate) const FG_SECONDARY: egui::Color32 = egui::Color32::from_rgb(198, 198,
 pub(crate) const FG_DISABLED: egui::Color32 = egui::Color32::from_rgb(141, 141, 141);
 pub(crate) const FG_DANGER: egui::Color32 = egui::Color32::from_rgb(250, 154, 159);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShellButtonStyle {
+    Primary,
+    Toolbar,
+    Secondary,
+    SecondaryStrong,
+    History,
+    Destructive,
+}
+
+pub(crate) fn shell_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    button_style: ShellButtonStyle,
+) -> egui::Response {
+    shell_button_enabled(ui, true, label, button_style)
+}
+
+pub(crate) fn shell_button_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    button_style: ShellButtonStyle,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let mut style = ui.style().as_ref().clone();
+        let (inactive_fill, hovered_fill, active_fill, text_color, strong) =
+            shell_button_colors(button_style);
+        style.visuals.widgets.inactive.bg_fill = inactive_fill;
+        style.visuals.widgets.inactive.weak_bg_fill = inactive_fill;
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.hovered.bg_fill = hovered_fill;
+        style.visuals.widgets.hovered.weak_bg_fill = hovered_fill;
+        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.active.bg_fill = active_fill;
+        style.visuals.widgets.active.weak_bg_fill = active_fill;
+        style.visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
+        ui.set_style(style);
+
+        let text = egui::RichText::new(label).color(text_color);
+        let text = if strong { text.strong() } else { text };
+        ui.add_enabled(enabled, egui::Button::new(text))
+    })
+    .inner
+}
+
+fn shell_button_colors(
+    button_style: ShellButtonStyle,
+) -> (
+    egui::Color32,
+    egui::Color32,
+    egui::Color32,
+    egui::Color32,
+    bool,
+) {
+    match button_style {
+        ShellButtonStyle::Primary => (
+            FG_PRIMARY,
+            egui::Color32::from_rgb(224, 224, 224),
+            FG_SECONDARY,
+            SHELL_BG,
+            true,
+        ),
+        ShellButtonStyle::Toolbar => (
+            PANEL_BG,
+            CONTROL_HOVER_BG,
+            CONTROL_PRESSED_BG,
+            FG_PRIMARY,
+            false,
+        ),
+        ShellButtonStyle::Secondary => (
+            CONTROL_BG,
+            CONTROL_HOVER_BG,
+            CONTROL_PRESSED_BG,
+            FG_PRIMARY,
+            false,
+        ),
+        ShellButtonStyle::SecondaryStrong => (
+            CONTROL_BG,
+            CONTROL_HOVER_BG,
+            CONTROL_PRESSED_BG,
+            FG_PRIMARY,
+            true,
+        ),
+        ShellButtonStyle::History => (
+            SHELL_BG,
+            CONTROL_HOVER_BG,
+            CONTROL_PRESSED_BG,
+            FG_SECONDARY,
+            false,
+        ),
+        ShellButtonStyle::Destructive => (
+            PANEL_BG,
+            CONTROL_HOVER_BG,
+            CONTROL_PRESSED_BG,
+            FG_DANGER,
+            false,
+        ),
+    }
+}
+
 pub(crate) fn shell_scope<R>(
     ui: &mut egui::Ui,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
@@ -127,8 +228,8 @@ pub fn configure_interface_style(context: &egui::Context) {
 mod tests {
     use super::{
         BORDER_CONTROL, BORDER_FOCUS, CONTROL_BG, CONTROL_HEIGHT, CONTROL_RADIUS, FG_PRIMARY,
-        PANEL_BG, PLOT_BG_IMMUTABLE, SHELL_BG, WINDOW_RADIUS, configure_interface_style,
-        shell_scope,
+        PANEL_BG, PLOT_BG_IMMUTABLE, SHELL_BG, ShellButtonStyle, WINDOW_RADIUS,
+        configure_interface_style, shell_button_colors, shell_scope,
     };
     use eframe::egui;
 
@@ -181,6 +282,22 @@ mod tests {
             context.global_style().visuals.panel_fill,
             original.visuals.panel_fill
         );
+    }
+
+    #[test]
+    fn every_shell_button_style_has_visible_hover_and_pressed_feedback() {
+        for button_style in [
+            ShellButtonStyle::Primary,
+            ShellButtonStyle::Toolbar,
+            ShellButtonStyle::Secondary,
+            ShellButtonStyle::SecondaryStrong,
+            ShellButtonStyle::History,
+            ShellButtonStyle::Destructive,
+        ] {
+            let (inactive, hovered, active, _, _) = shell_button_colors(button_style);
+            assert_ne!(inactive, hovered, "{button_style:?} lacks hover feedback");
+            assert_ne!(hovered, active, "{button_style:?} lacks pressed feedback");
+        }
     }
 
     fn contrast_ratio(foreground: egui::Color32, background: egui::Color32) -> f32 {
