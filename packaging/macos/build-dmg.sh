@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+project_dir=$(CDPATH='' cd -- "$script_dir/../.." && pwd)
 repository_dir="$project_dir"
 package_dir="$project_dir/target/package"
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | head -n 1)
@@ -16,6 +16,11 @@ macos_dir="$contents_dir/MacOS"
 iconset_dir="$package_dir/InstPlotLite.iconset"
 dmg_root="$package_dir/dmg-root"
 dmg_path="$package_dir/InstPlot-Lite-$version-macos-$architecture.dmg"
+install_dir="/Applications"
+install_path="$install_dir/$app_name.app"
+install_staging="$install_dir/.InstPlotLite-install-$$"
+install_backup="$install_dir/.InstPlotLite-previous-$$"
+install_committed=0
 
 if [ "${INSTPLOT_SKIP_BUILD:-0}" != "1" ]; then
     cd "$project_dir"
@@ -53,6 +58,9 @@ for icon_size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset_dir" -o "$resources_dir/InstPlotLite.icns"
 
+icon_count=$(find "$resources_dir" -maxdepth 1 -type f -name '*.icns' | wc -l | tr -d ' ')
+test "$icon_count" -eq 1
+
 cat > "$contents_dir/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -89,6 +97,8 @@ cat > "$contents_dir/Info.plist" <<EOF
 EOF
 
 plutil -lint "$contents_dir/Info.plist"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$contents_dir/Info.plist")" = \
+    "InstPlotLite"
 codesign --force --deep --sign - "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 "$macos_dir/instplot-lite" --check "$project_dir/tests/fixtures/smoke.csv"
@@ -99,6 +109,52 @@ ln -s /Applications "$dmg_root/Applications"
 hdiutil create -quiet -fs HFS+ -format UDBZ -volname "$app_name" \
     -srcfolder "$dmg_root" "$dmg_path"
 hdiutil verify "$dmg_path"
+
+if [ "${INSTPLOT_INSTALL_LOCAL:-0}" = "1" ]; then
+    cleanup_install() {
+        if [ "$install_committed" -ne 1 ] && [ -d "$install_backup" ]; then
+            rm -rf "$install_path"
+            mv "$install_backup" "$install_path"
+        fi
+        rm -rf "$install_staging"
+    }
+    trap cleanup_install EXIT HUP INT TERM
+
+    rm -rf "$install_staging" "$install_backup"
+    ditto "$app_dir" "$install_staging"
+    codesign --verify --deep --strict "$install_staging"
+    "$install_staging/Contents/MacOS/instplot-lite" \
+        --check "$project_dir/tests/fixtures/smoke.csv"
+
+    # The signed hidden staging copy is now self-contained. Remove every App
+    # bundle under the build tree before registering the canonical install, or
+    # Spotlight can index a second bundle with the same identity and stale icon.
+    rm -rf "$app_dir" "$iconset_dir" "$dmg_root"
+
+    if [ -d "$install_path" ]; then
+        mv "$install_path" "$install_backup"
+    fi
+    mv "$install_staging" "$install_path"
+    codesign --verify --deep --strict "$install_path"
+    install_committed=1
+    rm -rf "$install_backup"
+    trap - EXIT HUP INT TERM
+
+    lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    "$lsregister" -u "$install_path" 2>/dev/null || true
+    "$lsregister" -f "$install_path"
+    # Prime the application importer before committing metadata to the index.
+    # A newly swapped bundle can otherwise return no Bundle attributes on the
+    # first import even though its Info.plist is already valid.
+    mdimport -t -d1 "$install_path" >/dev/null 2>&1
+    mdimport "$install_path"
+
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+        "$install_path/Contents/Info.plist")" = "$version"
+    spotlight_matches=$(mdfind \
+        'kMDItemCFBundleIdentifier == "com.zhiyu.instplot-lite"c')
+    test "$spotlight_matches" = "$install_path"
+fi
 
 # The packaged DMG is the distributable artifact. Keeping either staging app
 # makes Spotlight report extra InstPlot Lite installations.

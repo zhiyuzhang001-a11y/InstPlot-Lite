@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, PointerButton, Rect, Stroke, StrokeKind};
-use egui_plot::{Legend, Plot, PlotMemory, PlotPoint};
+use egui_plot::{GridInput, GridMark, Legend, Plot, PlotMemory, PlotPoint};
 
 use crate::{data::DataSet, session::FitOverlay};
 
@@ -106,6 +106,8 @@ pub fn show(ui: &mut egui::Ui, input: PlotViewInput<'_>) -> PlotResponse {
         .allow_drag(true)
         .allow_boxed_zoom(false)
         .pan_pointer_button(PointerButton::Secondary)
+        .x_grid_spacer(scale_aware_grid_marks)
+        .y_grid_spacer(scale_aware_grid_marks)
         .x_axis_formatter(move |mark, _range| {
             x_axis_display.format_tick(mark.value, mark.step_size)
         })
@@ -289,4 +291,122 @@ pub fn reset_plot_bounds_preserving_visibility(context: &egui::Context, plot_id:
 
 pub fn wheel_zoom_factor(wheel_delta: f32) -> f32 {
     (wheel_delta / 200.0).exp()
+}
+
+fn scale_aware_grid_marks(input: GridInput) -> Vec<GridMark> {
+    if !input.base_step_size.is_finite()
+        || input.base_step_size <= 0.0
+        || !input.bounds.0.is_finite()
+        || !input.bounds.1.is_finite()
+        || input.bounds.0 >= input.bounds.1
+    {
+        return Vec::new();
+    }
+
+    // egui_plot's default spacer rejects steps below EPSILON, even though
+    // small scientific data still has a valid, nonzero coordinate range.
+    // Normalize only the spacer input; plotted data and interaction stay in
+    // their original units. Keep ordinary ranges on the existing code path.
+    let scale = if input.base_step_size < f64::EPSILON || input.base_step_size > 1e300 {
+        10.0_f64.powi((input.base_step_size.log10().floor() as i32).clamp(-308, 306))
+    } else {
+        1.0
+    };
+    egui_plot::log_grid_spacer(10)(GridInput {
+        bounds: (input.bounds.0 / scale, input.bounds.1 / scale),
+        base_step_size: input.base_step_size / scale,
+    })
+    .into_iter()
+    .map(|mark| GridMark {
+        value: mark.value * scale,
+        // Coarser grid levels may exceed f64 even when all coordinates fit.
+        step_size: (mark.step_size * scale).min(f64::MAX),
+    })
+    .collect()
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    #[test]
+    fn tiny_axis_grid_matches_normal_units_and_formats_distinct_ticks() {
+        for scale in [1e-15, 1e-24, 1e-100] {
+            let marks = scale_aware_grid_marks(GridInput {
+                bounds: (-2.0 * scale, 6.0 * scale),
+                base_step_size: 0.2 * scale,
+            });
+            assert!(marks.len() >= 5);
+            let display = AxisDisplay::from_range(Some([-2.0 * scale, 6.0 * scale]));
+            let mut labels = std::collections::HashSet::new();
+            for mark in &marks {
+                let value = mark.value / scale;
+                assert!((-2.0 - 1e-10..=6.0 + 1e-10).contains(&value));
+                assert!((value - value.round()).abs() < 1e-10);
+                assert!(mark.step_size.is_finite() && mark.step_size > 0.0);
+                labels.insert(display.format_tick(mark.value, mark.step_size));
+            }
+            assert_eq!(labels.len(), marks.len());
+        }
+    }
+
+    #[test]
+    fn ordinary_axis_grid_is_unchanged() {
+        for step in [1e-10, 0.2, 10.0, 1e8] {
+            let input = || GridInput {
+                bounds: (-10.0 * step, 30.0 * step),
+                base_step_size: step,
+            };
+            assert_eq!(
+                scale_aware_grid_marks(input()),
+                egui_plot::log_grid_spacer(10)(input())
+            );
+        }
+    }
+
+    #[test]
+    fn small_variation_on_tiny_baseline_keeps_multiple_labels() {
+        let bounds = (-1.198912e-14, -1.198902e-14);
+        let marks = scale_aware_grid_marks(GridInput {
+            bounds,
+            base_step_size: 5e-21,
+        });
+        assert!(marks.len() >= 5);
+        let display = AxisDisplay::from_range(Some([bounds.0, bounds.1]));
+        let labels: std::collections::HashSet<_> = marks
+            .iter()
+            .map(|mark| {
+                assert!(mark.value >= bounds.0 && mark.value <= bounds.1);
+                display.format_tick(mark.value, mark.step_size)
+            })
+            .collect();
+        assert_eq!(labels.len(), marks.len());
+    }
+
+    #[test]
+    fn invalid_grid_ranges_do_not_generate_marks() {
+        for step in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                scale_aware_grid_marks(GridInput {
+                    bounds: (0.0, 1.0),
+                    base_step_size: step,
+                })
+                .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn extreme_finite_axis_scales_keep_valid_grid_marks() {
+        for scale in [1e-310, 1e307] {
+            let marks = scale_aware_grid_marks(GridInput {
+                bounds: (-2.0 * scale, 6.0 * scale),
+                base_step_size: 0.2 * scale,
+            });
+            assert!(marks.len() >= 5);
+            assert!(marks.iter().all(|mark| mark.value.is_finite()
+                && mark.step_size.is_finite()
+                && mark.step_size > 0.0));
+        }
+    }
 }

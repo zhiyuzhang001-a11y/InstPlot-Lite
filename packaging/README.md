@@ -16,6 +16,15 @@ Run `packaging/macos/build-dmg.sh`. It creates an application bundle, applies an
 ad-hoc signature for structural verification, runs the bundled executable's
 import smoke check, and creates a DMG in `target/package`.
 
+For a verified local replacement, run
+`INSTPLOT_INSTALL_LOCAL=1 packaging/macos/build-dmg.sh`. The script copies the
+validated bundle to a hidden installation staging path, removes every build-tree
+App before registering the canonical `/Applications/InstPlot Lite.app`, swaps
+the installation with rollback protection, and then requires Spotlight to
+return exactly that one bundle identity. It keeps one standard
+`InstPlotLite.icns` referenced by `CFBundleIconFile`; it does not rely on global
+icon-cache deletion.
+
 The local DMG is not notarized. Public releases still require a Developer ID
 Application signature and Apple notarization in CI.
 

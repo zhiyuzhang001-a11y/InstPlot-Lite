@@ -22,14 +22,19 @@ impl AxisDisplay {
         }
 
         let span = (maximum - minimum).abs();
-        let center = minimum + (maximum - minimum) * 0.5;
-        let offset = if span > 0.0 && center.abs() >= 10_000.0 && center.abs() / span >= 10_000.0 {
+        let center = minimum * 0.5 + maximum * 0.5;
+        let offset = if span.is_finite() && span > 0.0 && center.abs() / span >= 10_000.0 {
             // Keep the reference coarser than the visible variation so that
             // floating-point noise around exact powers of ten cannot make the
             // displayed baseline jump by one tick.
-            let quantum = 10.0_f64.powf(span.log10().ceil() + 1.0);
+            let quantum_exponent = span.log10().ceil() as i32 + 1;
+            let quantum = 10.0_f64.powi(quantum_exponent);
             if quantum.is_finite() && quantum > 0.0 {
-                (center / quantum).round() * quantum
+                // Parse the decimal reference once instead of multiplying
+                // binary floats and exposing a long 0000000001 tail.
+                format!("{}e{quantum_exponent}", (center / quantum).round())
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
             } else {
                 0.0
             }
@@ -54,7 +59,7 @@ impl AxisDisplay {
             || magnitude >= 100_000.0
             || (magnitude > 0.0 && magnitude < 0.001)
         {
-            engineering_exponent
+            engineering_exponent.clamp(-306, 306)
         } else {
             0
         };
@@ -121,17 +126,17 @@ fn decimals_for_step(step_size: f64) -> usize {
     if !step_size.is_finite() || step_size <= 0.0 {
         return 3;
     }
-    for decimals in 0..=8 {
+    for decimals in 0..=16 {
         let scaled = step_size * 10.0_f64.powi(decimals as i32);
-        if (scaled - scaled.round()).abs() <= scaled.abs().max(1.0) * 1.0e-9 {
+        if scaled >= 1.0 && (scaled - scaled.round()).abs() <= scaled.abs() * 1.0e-9 {
             return decimals;
         }
     }
-    ((-step_size.log10()).ceil() as isize + 2).clamp(0, 8) as usize
+    ((-step_size.log10()).ceil() as isize + 2).clamp(0, 16) as usize
 }
 
 fn format_axis_reference(value: f64) -> String {
-    let scientific = format!("{value:.12e}");
+    let scientific = format!("{value:e}");
     let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
     let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
     let exponent = exponent.parse::<i32>().unwrap_or(0);
@@ -257,5 +262,46 @@ mod tests {
         assert_eq!(format_axis_decimal(10.0, 1.0), "10");
         assert_eq!(format_axis_decimal(1.5, 0.25), "1.5");
         assert_eq!(format_axis_decimal(-1.0e-15, 0.1), "0");
+    }
+
+    #[test]
+    fn small_baselines_with_tiny_variations_use_relative_coordinates() {
+        for baseline in [300.0_f64, -0.02, -1.19891e-14] {
+            let step = baseline.abs() * 1e-11;
+            let display = AxisDisplay::from_range(Some([baseline, baseline + 10.0 * step]));
+            assert_ne!(display.offset, 0.0);
+            assert_ne!(
+                display.format_tick(baseline, step),
+                display.format_tick(baseline + step, step)
+            );
+        }
+    }
+
+    #[test]
+    fn zoomed_ticks_do_not_round_tiny_steps_to_zero_decimals() {
+        assert_eq!(format_axis_decimal(0.000000001, 0.000000001), "0.000000001");
+        let display = AxisDisplay::from_range(Some([0.0, 1.0]));
+        assert_ne!(
+            display.format_tick(0.5, 1e-11),
+            display.format_tick(0.5 + 1e-11, 1e-11)
+        );
+    }
+
+    #[test]
+    fn subnormal_axis_scale_is_nonzero_and_finite() {
+        let display = AxisDisplay::from_range(Some([1e-320, 9e-320]));
+        assert!(display.scale().is_finite() && display.scale() > 0.0);
+        assert!(!display.format_tick(2e-320, 1e-320).contains("inf"));
+        assert_ne!(
+            display.format_tick(2e-320, 1e-320),
+            display.format_tick(3e-320, 1e-320)
+        );
+    }
+
+    #[test]
+    fn tiny_baseline_reference_has_no_binary_rounding_tail() {
+        let display =
+            AxisDisplay::from_range(Some([-1.1989109536066663e-14, -1.1989080414836231e-14]));
+        assert!(display.label("energy").contains("基准 -1.1989×10^(-14)"));
     }
 }
