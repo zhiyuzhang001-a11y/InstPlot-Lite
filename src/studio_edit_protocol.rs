@@ -7,8 +7,52 @@ use std::{
     path::Path,
 };
 
-pub const CAPABILITY: &str = "INSTPLOT_STUDIO_EDIT_PROTOCOL_V1";
+pub const CAPABILITY: &str = "INSTPLOT_STUDIO_EDIT_PROTOCOL_V2";
 pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Each revision is immutable; never overwrite a request that Lite is reading.
+pub fn request_path(root: &Path, revision: u64) -> std::path::PathBuf {
+    if revision == 0 {
+        root.join("request.json")
+    } else {
+        root.join(format!("request-{revision}.json"))
+    }
+}
+
+pub fn result_path(request: &Path) -> Result<std::path::PathBuf, String> {
+    let name = request
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or("invalid request name")?;
+    if name == "request.json" {
+        return Ok(request.with_file_name("result.json"));
+    }
+    let revision = name
+        .strip_prefix("request-")
+        .and_then(|v| v.strip_suffix(".json"))
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .ok_or("invalid request name")?;
+    Ok(request.with_file_name(format!("result-{revision}.json")))
+}
+
+pub fn next_request_path(request: &Path) -> Result<std::path::PathBuf, String> {
+    result_path(request)?;
+    let revision = if request.file_name().and_then(|v| v.to_str()) == Some("request.json") {
+        0
+    } else {
+        request
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .and_then(|v| v.strip_prefix("request-"))
+            .and_then(|v| v.parse::<u64>().ok())
+            .ok_or("invalid revision")?
+    };
+    Ok(request_path(
+        request.parent().ok_or("missing directory")?,
+        revision.checked_add(1).ok_or("revision overflow")?,
+    ))
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,6 +199,33 @@ pub fn write_transfer(path: &Path, transfer: &Transfer) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transport_preserves_float_bits_and_revision_paths() {
+        let values = [
+            0.0_f64,
+            -0.0,
+            159.17048,
+            362.13858,
+            0.17881,
+            1.2345678901234567,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+        ];
+        let decoded: Vec<f64> =
+            serde_json::from_slice(&serde_json::to_vec(&values).unwrap()).unwrap();
+        assert!(
+            values
+                .iter()
+                .zip(decoded)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        let root = Path::new("/test");
+        assert_eq!(
+            next_request_path(&request_path(root, 0)).unwrap(),
+            request_path(root, 1)
+        );
+        assert!(result_path(&root.join("../arbitrary.json")).is_err());
+    }
     fn sample() -> Transfer {
         Transfer {
             schema_version: 1,
