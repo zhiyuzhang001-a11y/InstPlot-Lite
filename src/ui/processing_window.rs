@@ -124,7 +124,13 @@ pub(crate) fn show(
         context,
         processing_viewport_id(),
         egui::ViewportBuilder::default()
-            .with_title("InstPlot Lite · 数据处理")
+            .with_title(format!(
+                "InstPlot Lite · 数据处理 — {}",
+                dataset_names
+                    .get(active_dataset)
+                    .map(String::as_str)
+                    .unwrap_or("无数据")
+            ))
             .with_inner_size([570.0, 570.0])
             .with_min_inner_size([520.0, 500.0])
             .with_resizable(true),

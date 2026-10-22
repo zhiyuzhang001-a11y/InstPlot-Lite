@@ -6,21 +6,47 @@ pub(super) struct StudioEdit {
     request: Transfer,
     sent: bool,
     last_poll: std::time::Instant,
+    drafts: std::collections::BTreeMap<(String, String), PathBuf>,
+    draft_files: Vec<PathBuf>,
 }
 
 impl InstPlotLiteApp {
     pub(crate) fn open_studio_edit(&mut self, path: PathBuf) -> Result<(), String> {
         studio_edit_protocol::result_path(&path)?;
         let request = studio_edit_protocol::read_transfer(&path)?;
-        self.x_column = request
+        let switching = self
+            .studio_edit
+            .as_ref()
+            .is_some_and(|e| e.request.target_id != request.target_id);
+        let drafts = self
+            .studio_edit
+            .as_ref()
+            .map(|e| e.drafts.clone())
+            .unwrap_or_default();
+        let draft_files = self
+            .studio_edit
+            .as_ref()
+            .map(|e| e.draft_files.clone())
+            .unwrap_or_default();
+        let restored = if switching {
+            drafts
+                .get(&(request.target_id.clone(), request.base_sha256.clone()))
+                .map(|p| studio_edit_protocol::read_transfer(p))
+                .transpose()?
+                .filter(|d| d.matches_session(&request))
+        } else {
+            None
+        };
+        let data = restored.as_ref().unwrap_or(&request);
+        self.x_column = data
             .columns
             .iter()
-            .position(|c| c.name == request.x_column)
+            .position(|c| c.name == data.x_column)
             .unwrap();
-        self.y_column = request
+        self.y_column = data
             .columns
             .iter()
-            .position(|c| c.name == request.y_column)
+            .position(|c| c.name == data.y_column)
             .unwrap();
         self.datasets = vec![data::DataSet {
             source: path.clone(),
@@ -30,7 +56,7 @@ impl InstPlotLiteApp {
             fit_link: None,
             encoding: "Studio edit v1".to_owned(),
             separator: "embedded".to_owned(),
-            columns: request
+            columns: data
                 .columns
                 .iter()
                 .map(|c| data::NumericColumn {
@@ -38,11 +64,31 @@ impl InstPlotLiteApp {
                     values: c.values.iter().map(|v| v.unwrap_or(f64::NAN)).collect(),
                 })
                 .collect(),
-            row_count: request.alive.len(),
-            alive: request.alive.clone(),
+            row_count: data.alive.len(),
+            alive: data.alive.clone(),
         }];
         self.active_dataset = 0;
         self.history = EditHistory::default();
+        self.pending_deletion = None;
+        self.selection_start = None;
+        self.selection_current = None;
+        self.selected_coordinate = None;
+        self.visible_x_range = None;
+        self.fit_results = FitResultState::default();
+        self.fit_settings.message.clear();
+        self.processing_settings.scope = ProcessingScope::Current;
+        self.processing_settings.selected_datasets = vec![true];
+        if let Some([min, max]) = finite_range(&self.datasets[0].columns[self.x_column].values) {
+            self.processing_settings.fit_min = min;
+            self.processing_settings.fit_max = max;
+            self.processing_settings.local_min = min;
+            self.processing_settings.local_max = max;
+            self.processing_settings.denoise_min = min;
+            self.processing_settings.denoise_max = max;
+        }
+        self.fit_settings.scope = FitScope::Current;
+        self.fit_settings.selected_datasets = vec![true];
+        self.refresh_fit_defaults_from_active_dataset();
         self.reset_view = true;
         self.status = "处理完成后点击“发回 Studio”；原始文件不会被覆盖。".to_owned();
         self.studio_edit = Some(StudioEdit {
@@ -50,12 +96,17 @@ impl InstPlotLiteApp {
             request,
             sent: false,
             last_poll: std::time::Instant::now(),
+            drafts,
+            draft_files,
         });
+        if restored.is_some() {
+            self.status = "已恢复这条曲线未发回的草稿；原文件未覆盖。".to_owned();
+        }
         Ok(())
     }
 
     fn send_studio_edit(&mut self) -> Result<(), String> {
-        let edit = self.studio_edit.as_mut().ok_or("没有 Studio 编辑会话")?;
+        let edit = self.studio_edit.as_ref().ok_or("没有 Studio 编辑会话")?;
         if edit.sent {
             return Err("等待 Studio 确认本次结果".to_owned());
         }
@@ -63,6 +114,17 @@ impl InstPlotLiteApp {
         if !current_request.matches_session(&edit.request) || current_request != edit.request {
             return Err("Studio 编辑请求已变化，未发送".to_owned());
         }
+        let result = self.studio_edit_snapshot()?;
+        studio_edit_protocol::write_transfer(
+            &studio_edit_protocol::result_path(&edit.request_path)?,
+            &result,
+        )?;
+        self.studio_edit.as_mut().unwrap().sent = true;
+        Ok(())
+    }
+
+    fn studio_edit_snapshot(&self) -> Result<Transfer, String> {
+        let edit = self.studio_edit.as_ref().ok_or("没有 Studio 编辑会话")?;
         let dataset = self
             .datasets
             .get(self.active_dataset)
@@ -96,12 +158,7 @@ impl InstPlotLiteApp {
             })
             .collect();
         result.alive = dataset.alive.clone();
-        studio_edit_protocol::write_transfer(
-            &studio_edit_protocol::result_path(&edit.request_path)?,
-            &result,
-        )?;
-        edit.sent = true;
-        Ok(())
+        Ok(result)
     }
 
     pub(super) fn studio_edit_bar(&mut self, ui: &mut egui::Ui) {
@@ -109,11 +166,13 @@ impl InstPlotLiteApp {
         let Some(edit) = &self.studio_edit else {
             return;
         };
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::Title(format!(
+        ui.ctx().send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::Title(format!(
                 "InstPlot Lite — Studio 编辑：{}",
                 edit.request.label
-            )));
+            )),
+        );
         let mut send = false;
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("Studio 编辑：{}", edit.request.label));
@@ -128,6 +187,15 @@ impl InstPlotLiteApp {
             } else {
                 "只更新这一组；原文件和 Studio 排版不变。"
             });
+            if !edit.drafts.is_empty() {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!(
+                        "已保留 {} 份未发回草稿，切回原曲线可继续（请勿关闭 Lite）。",
+                        edit.drafts.len()
+                    ),
+                );
+            }
         });
         if send {
             self.status = match self.send_studio_edit() {
@@ -141,7 +209,10 @@ impl InstPlotLiteApp {
         let Some(edit) = &mut self.studio_edit else {
             return;
         };
-        context.request_repaint_after(std::time::Duration::from_millis(250));
+        context.request_repaint_after_for(
+            std::time::Duration::from_millis(250),
+            egui::ViewportId::ROOT,
+        );
         if edit.last_poll.elapsed() < std::time::Duration::from_millis(250) {
             return;
         }
@@ -166,6 +237,48 @@ impl InstPlotLiteApp {
                 return;
             }
         };
+        if request.target_id != self.studio_edit.as_ref().unwrap().request.target_id {
+            let snapshot = match self.studio_edit_snapshot() {
+                Ok(s) => s,
+                Err(e) => {
+                    self.status = format!("切换暂停：{e}；请先导出当前数据");
+                    return;
+                }
+            };
+            let edit = self.studio_edit.as_mut().unwrap();
+            if snapshot != edit.request {
+                // Retain unsent work before changing dataset. Restore only when
+                // the Studio source revision still matches, never after undo.
+                let bytes: u64 = edit
+                    .draft_files
+                    .iter()
+                    .filter_map(|p| p.metadata().ok())
+                    .map(|m| m.len())
+                    .sum();
+                let incoming_bytes = serde_json::to_vec(&snapshot)
+                    .map(|v| v.len() as u64)
+                    .unwrap_or(u64::MAX);
+                if edit.draft_files.len() >= 32
+                    || bytes.saturating_add(incoming_bytes) > 128 * 1024 * 1024
+                {
+                    self.status = "草稿已达上限，未切换；请先导出当前修改。".to_owned();
+                    return;
+                }
+                let draft_path = edit.request_path.with_file_name(format!(
+                    "draft-{}",
+                    edit.request_path.file_name().unwrap().to_string_lossy()
+                ));
+                if let Err(e) = studio_edit_protocol::write_transfer(&draft_path, &snapshot) {
+                    self.status = format!("草稿未保存，未切换：{e}");
+                    return;
+                }
+                edit.drafts.insert(
+                    (snapshot.target_id.clone(), snapshot.base_sha256.clone()),
+                    draft_path.clone(),
+                );
+                edit.draft_files.push(draft_path);
+            }
+        }
         // Acknowledging an identical result keeps Lite's processing undo history.
         // Studio undo/redo (or switching dataset) replaces the editor baseline.
         let unchanged = self.datasets.len() == 1
@@ -200,6 +313,13 @@ impl InstPlotLiteApp {
         }
         context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        context.request_repaint_of(egui::ViewportId::ROOT);
+        if self.processing_open {
+            context.request_repaint_of(processing_viewport_id());
+        }
+        if self.fit_open {
+            context.request_repaint_of(fitting_viewport_id());
+        }
         context.request_repaint();
     }
 }
@@ -307,6 +427,52 @@ mod tests {
             .unwrap(),
             request
         );
+        // Switching targets updates already-open tool windows and their ranges,
+        // while retaining unreturned work for a later switch back.
+        app.datasets[0].columns[1].values[1] = 99.0;
+        app.processing_open = true;
+        app.fit_open = true;
+        app.pending_deletion = Some(PendingDeletion {
+            dataset_index: 0,
+            rows: vec![0],
+            x_column: 0,
+            y_column: 1,
+        });
+        let mut other = request.clone();
+        other.target_id = "other".to_owned();
+        other.label = "other curve".to_owned();
+        other.columns[0].values = vec![Some(10.0), Some(20.0), Some(30.0), None];
+        let other_path = studio_edit_protocol::next_request_path(&undo_path).unwrap();
+        studio_edit_protocol::write_transfer(&other_path, &other).unwrap();
+        app.studio_edit.as_mut().unwrap().last_poll =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.poll_studio_edit(&context);
+        assert_eq!(app.datasets[0].plot_id, "other");
+        assert!(app.processing_open && app.fit_open);
+        assert!(app.pending_deletion.is_none());
+        assert_eq!(
+            (
+                app.processing_settings.fit_min,
+                app.processing_settings.fit_max
+            ),
+            (10.0, 30.0)
+        );
+        assert_eq!(
+            (app.fit_settings.x_min, app.fit_settings.x_max),
+            (10.0, 30.0)
+        );
+        let back_path = studio_edit_protocol::next_request_path(&other_path).unwrap();
+        studio_edit_protocol::write_transfer(&back_path, &request).unwrap();
+        app.studio_edit.as_mut().unwrap().last_poll =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.poll_studio_edit(&context);
+        assert_eq!(app.datasets[0].plot_id, request.target_id);
+        assert_eq!(app.datasets[0].columns[1].values[1], 99.0);
+        for draft in app.studio_edit.as_ref().unwrap().drafts.values() {
+            std::fs::remove_file(draft).unwrap();
+        }
+        std::fs::remove_file(other_path).unwrap();
+        std::fs::remove_file(back_path).unwrap();
         for extra in [
             studio_edit_protocol::result_path(&next).unwrap(),
             studio_edit_protocol::result_path(&undo_path).unwrap(),
