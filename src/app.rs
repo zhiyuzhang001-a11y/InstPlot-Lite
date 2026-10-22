@@ -30,6 +30,7 @@ use crate::{
 
 mod import;
 mod screenshot;
+mod studio_edit;
 
 struct PendingDeletion {
     dataset_index: usize,
@@ -39,6 +40,7 @@ struct PendingDeletion {
 }
 
 pub struct InstPlotLiteApp {
+    studio_edit: Option<studio_edit::StudioEdit>,
     demo_points: Vec<[f64; 2]>,
     datasets: Vec<data::DataSet>,
     active_dataset: usize,
@@ -76,6 +78,7 @@ impl InstPlotLiteApp {
         fonts::install_interface_fonts(&creation_context.egui_ctx);
         configure_interface_style(&creation_context.egui_ctx);
         let mut app = Self {
+            studio_edit: None,
             demo_points: demo_curve(512),
             datasets: Vec::new(),
             active_dataset: 0,
@@ -1398,6 +1401,7 @@ impl eframe::App for InstPlotLiteApp {
             self.history.can_undo(),
             self.history.can_redo(),
         );
+        self.studio_edit_bar(ui);
         for action in main_actions {
             match action {
                 MainAction::OpenFiles => self.open_files(),
