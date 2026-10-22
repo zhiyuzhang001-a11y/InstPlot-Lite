@@ -212,7 +212,9 @@ mod file_tests {
             .canonicalize()
             .unwrap()
             .join(format!("instplot-edit-test-{}-{id}", std::process::id()));
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        let mut builder = builder;
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
