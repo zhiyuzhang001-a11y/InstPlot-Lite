@@ -1,6 +1,7 @@
 use crate::{
     ProcessingError, ProcessingMetadata, ProcessingOperation, ProcessingResult, center_values,
-    denoise_values, local_flatten_values, normalize_values, remove_polynomial_background,
+    denoise_values, local_flatten_values, normalize_values, remove_linear_background,
+    remove_polynomial_background,
 };
 use instplot_core::DataSet;
 use instplot_fitting as fitting;
@@ -17,6 +18,15 @@ pub fn apply_to_dataset(
         .values
         .as_slice();
     match operation {
+        ProcessingOperation::AutoLinearBackground {
+            x_column,
+            zero_baseline,
+        } => crate::remove_auto_linear_background(
+            column_values(dataset, *x_column, "auto_linear_background")?,
+            y,
+            &dataset.alive,
+            *zero_baseline,
+        ),
         ProcessingOperation::Center => center_values(y),
         ProcessingOperation::CenterNormalize { top_n } => {
             let centered = center_values(y)?;
@@ -39,6 +49,19 @@ pub fn apply_to_dataset(
             }
             Ok(normalized)
         }
+        ProcessingOperation::LinearBackground {
+            x_column,
+            left,
+            right,
+            zero_baseline,
+        } => remove_linear_background(
+            column_values(dataset, *x_column, "linear_background")?,
+            y,
+            &dataset.alive,
+            *left,
+            *right,
+            *zero_baseline,
+        ),
         ProcessingOperation::PolynomialBackground {
             x_column,
             fit_min,

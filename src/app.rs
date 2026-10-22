@@ -454,6 +454,7 @@ impl InstPlotLiteApp {
         self.processing_settings.selected_datasets = (0..self.datasets.len())
             .map(|index| index == self.active_dataset)
             .collect();
+        self.processing_settings.linear_preview = None;
         let range = self
             .datasets
             .get(self.active_dataset)
@@ -466,6 +467,8 @@ impl InstPlotLiteApp {
             self.processing_settings.local_max = maximum;
             self.processing_settings.denoise_min = minimum;
             self.processing_settings.denoise_max = maximum;
+            self.processing_settings
+                .set_linear_defaults(minimum, maximum);
         }
         self.processing_open = true;
     }
@@ -659,6 +662,9 @@ impl InstPlotLiteApp {
             &mut self.processing_settings,
             &dataset_names,
             self.active_dataset,
+            self.datasets.get(self.active_dataset),
+            self.x_column,
+            self.y_column,
         );
         if response.active_dataset != self.active_dataset {
             self.active_dataset = response.active_dataset;
@@ -670,10 +676,30 @@ impl InstPlotLiteApp {
             return;
         };
         let (operation, suffix) = match action {
+            ProcessingAction::AutoLinearBackground { zero_baseline } => (
+                ProcessingOperation::AutoLinearBackground {
+                    x_column: self.x_column,
+                    zero_baseline,
+                },
+                "智能线性去背景".to_owned(),
+            ),
             ProcessingAction::Center => (ProcessingOperation::Center, "对称".to_owned()),
             ProcessingAction::CenterNormalize => (
                 ProcessingOperation::CenterNormalize { top_n: 20 },
                 "归一化".to_owned(),
+            ),
+            ProcessingAction::LinearBackground {
+                left,
+                right,
+                zero_baseline,
+            } => (
+                ProcessingOperation::LinearBackground {
+                    x_column: self.x_column,
+                    left,
+                    right,
+                    zero_baseline,
+                },
+                "线性去背景".to_owned(),
             ),
             ProcessingAction::PolynomialBackground {
                 fit_min,
@@ -1585,6 +1611,23 @@ fn processing_operation_with_x(
     x_column: usize,
 ) -> ProcessingOperation {
     match operation {
+        ProcessingOperation::AutoLinearBackground { zero_baseline, .. } => {
+            ProcessingOperation::AutoLinearBackground {
+                x_column,
+                zero_baseline: *zero_baseline,
+            }
+        }
+        ProcessingOperation::LinearBackground {
+            left,
+            right,
+            zero_baseline,
+            ..
+        } => ProcessingOperation::LinearBackground {
+            x_column,
+            left: *left,
+            right: *right,
+            zero_baseline: *zero_baseline,
+        },
         ProcessingOperation::PolynomialBackground {
             fit_min,
             fit_max,
@@ -1634,6 +1677,24 @@ fn processing_operation_with_x(
 
 fn processing_summary(metadata: &ProcessingMetadata) -> String {
     match metadata {
+        ProcessingMetadata::AutoLinearBackground { slope, period, .. } => {
+            format!("智能周期模型，周期 {period:.4}（原 X 单位），斜率 {slope:.6e}")
+        }
+        ProcessingMetadata::LinearBackground {
+            slope,
+            counts,
+            zero_baseline,
+            ..
+        } => format!(
+            "参考点 {}/{}，斜率 {slope:.6e}；{}",
+            counts[0],
+            counts[1],
+            if *zero_baseline {
+                "同时归零"
+            } else {
+                "保留左侧基准，仅去斜率"
+            }
+        ),
         ProcessingMetadata::Center { midpoint } => format!("中点 {midpoint:.6}"),
         ProcessingMetadata::Normalize {
             midpoint,
@@ -1653,6 +1714,131 @@ fn processing_summary(metadata: &ProcessingMetadata) -> String {
         ProcessingMetadata::Formula { expression, a, b } => {
             format!("公式 {expression}（a={a:.6}，b={b:.6}）")
         }
+    }
+}
+
+#[cfg(test)]
+mod linear_batch_tests {
+    use super::*;
+    fn app() -> InstPlotLiteApp {
+        let cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        let mut app = InstPlotLiteApp::new(&cc, Vec::new(), None);
+        let dataset = |id: &str, slope: f64| data::DataSet {
+            source: format!("{id}.csv").into(),
+            label: None,
+            kind: data::DataSetKind::Source,
+            plot_id: id.into(),
+            fit_link: None,
+            encoding: "UTF8".into(),
+            separator: ",".into(),
+            row_count: 4,
+            alive: vec![true; 4],
+            columns: vec![
+                data::NumericColumn {
+                    name: "x".into(),
+                    values: vec![0.0, 1.0, 9.0, 10.0],
+                },
+                data::NumericColumn {
+                    name: "y".into(),
+                    values: vec![5.0, 5.0 + slope, 5.0 + 9.0 * slope, 5.0 + 10.0 * slope],
+                },
+            ],
+        };
+        let a = dataset("a", 2.0);
+        let mut b = dataset("b", 3.0);
+        b.columns.swap(0, 1);
+        app.datasets = vec![a, b];
+        app.x_column = 0;
+        app.y_column = 1;
+        app.processing_settings.scope = ProcessingScope::Selected;
+        app.processing_settings.selected_datasets = vec![true, true];
+        app
+    }
+    fn operation() -> ProcessingOperation {
+        ProcessingOperation::LinearBackground {
+            x_column: 0,
+            left: [0.0, 1.0],
+            right: [9.0, 10.0],
+            zero_baseline: true,
+        }
+    }
+    #[test]
+    fn linear_batch_maps_columns_by_name_and_undo_redo_is_one_atomic_step() {
+        let mut app = app();
+        let before = app.datasets.clone();
+        app.apply_processing(operation(), "线性去背景");
+        assert!(
+            app.datasets[0].columns[1]
+                .values
+                .iter()
+                .all(|v| v.abs() < 1e-12)
+        );
+        assert!(
+            app.datasets[1].columns[0]
+                .values
+                .iter()
+                .all(|v| v.abs() < 1e-12)
+        );
+        app.undo();
+        for (a, b) in app.datasets.iter().zip(&before) {
+            assert_eq!(a.columns[0].values, b.columns[0].values);
+            assert_eq!(a.columns[1].values, b.columns[1].values);
+        }
+        assert!(!app.history.can_undo());
+        app.redo();
+        assert!(
+            app.datasets[1].columns[0]
+                .values
+                .iter()
+                .all(|v| v.abs() < 1e-12)
+        );
+    }
+    #[test]
+    fn missing_reference_in_one_curve_aborts_entire_batch_without_partial_edits() {
+        let mut app = app();
+        app.datasets[1].columns[1].values = vec![2.0, 3.0, 4.0, 5.0];
+        let before = app.datasets[0].columns[1].values.clone();
+        app.apply_processing(operation(), "线性去背景");
+        assert_eq!(app.datasets[0].columns[1].values, before);
+        assert!(!app.history.can_undo());
+        assert!(app.status.starts_with("处理未执行"));
+    }
+
+    #[test]
+    fn automatic_batch_is_atomic_maps_named_columns_and_undoes_together() {
+        let mut app = app();
+        let x: Vec<_> = (0..361).map(|i| i as f64).collect();
+        let y: Vec<_> = x
+            .iter()
+            .map(|x| 5.0 + (x * std::f64::consts::TAU / 180.0).cos() + 0.003 * x)
+            .collect();
+        app.datasets[0].columns[0].values = x.clone();
+        app.datasets[0].columns[1].values = y.clone();
+        app.datasets[1].columns[1].values = x;
+        app.datasets[1].columns[0].values = y.clone();
+        for d in &mut app.datasets {
+            d.row_count = 361;
+            d.alive = vec![true; 361];
+        }
+        let op = ProcessingOperation::AutoLinearBackground {
+            x_column: 0,
+            zero_baseline: false,
+        };
+        app.apply_processing(op.clone(), "智能线性去背景");
+        assert!((app.datasets[0].columns[1].values[360] - 6.0).abs() < 0.01);
+        assert_eq!(
+            app.datasets[0].columns[1].values,
+            app.datasets[1].columns[0].values
+        );
+        app.undo();
+        assert_eq!(app.datasets[0].columns[1].values, y);
+        assert_eq!(app.datasets[1].columns[0].values, y);
+        assert!(!app.history.can_undo());
+        app.datasets[1].columns[0].values = vec![1.0; 361];
+        app.apply_processing(op, "智能线性去背景");
+        assert_eq!(app.datasets[0].columns[1].values, y);
+        assert!(!app.history.can_undo());
+        assert!(app.status.starts_with("处理未执行"));
     }
 }
 

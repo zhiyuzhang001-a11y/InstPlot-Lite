@@ -85,7 +85,9 @@ impl InstPlotLiteApp {
             self.processing_settings.local_max = max;
             self.processing_settings.denoise_min = min;
             self.processing_settings.denoise_max = max;
+            self.processing_settings.set_linear_defaults(min, max);
         }
+        self.processing_settings.linear_preview = None;
         self.fit_settings.scope = FitScope::Current;
         self.fit_settings.selected_datasets = vec![true];
         self.refresh_fit_defaults_from_active_dataset();
@@ -237,7 +239,8 @@ impl InstPlotLiteApp {
                 return;
             }
         };
-        if request.target_id != self.studio_edit.as_ref().unwrap().request.target_id {
+        let switching = request.target_id != self.studio_edit.as_ref().unwrap().request.target_id;
+        if switching {
             let snapshot = match self.studio_edit_snapshot() {
                 Ok(s) => s,
                 Err(e) => {
@@ -311,14 +314,30 @@ impl InstPlotLiteApp {
         } else {
             self.status = "已同步 Studio 当前数据（包括撤销/重做）；联动保持连接。".to_owned();
         }
-        context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        // On macOS making the root visible can raise it after immediate child
+        // viewport commands. Keep the open editor in front on target switches.
+        if switching && !self.processing_open && !self.fit_open {
+            context
+                .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+            context.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                egui::ViewportCommand::Minimized(false),
+            );
+            focus_viewport(context, egui::ViewportId::ROOT);
+        }
         context.request_repaint_of(egui::ViewportId::ROOT);
         if self.processing_open {
             context.request_repaint_of(processing_viewport_id());
         }
         if self.fit_open {
             context.request_repaint_of(fitting_viewport_id());
+        }
+        if switching {
+            if self.processing_open {
+                focus_viewport(context, processing_viewport_id());
+            } else if self.fit_open {
+                focus_viewport(context, fitting_viewport_id());
+            }
         }
         context.request_repaint();
     }

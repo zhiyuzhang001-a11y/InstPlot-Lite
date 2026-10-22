@@ -1,14 +1,26 @@
 use std::fmt;
 
 mod adapter;
+mod auto_background;
 
 pub use adapter::apply_to_dataset;
+pub use auto_background::remove_auto_linear_background;
 
 #[derive(Clone, Debug)]
 pub enum ProcessingOperation {
+    AutoLinearBackground {
+        x_column: usize,
+        zero_baseline: bool,
+    },
     Center,
     CenterNormalize {
         top_n: usize,
+    },
+    LinearBackground {
+        x_column: usize,
+        left: [f64; 2],
+        right: [f64; 2],
+        zero_baseline: bool,
     },
     PolynomialBackground {
         x_column: usize,
@@ -46,6 +58,15 @@ pub enum Anchor {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProcessingMetadata {
+    AutoLinearBackground {
+        slope: f64,
+        anchor_x: f64,
+        baseline: f64,
+        period: f64,
+        noise: f64,
+        span: f64,
+        points: usize,
+    },
     Center {
         midpoint: f64,
     },
@@ -56,6 +77,13 @@ pub enum ProcessingMetadata {
     },
     PolynomialBackground {
         order: usize,
+    },
+    LinearBackground {
+        left_anchor: [f64; 2],
+        right_anchor: [f64; 2],
+        counts: [usize; 2],
+        slope: f64,
+        zero_baseline: bool,
     },
     LocalFlatten {
         slope: f64,
@@ -205,6 +233,95 @@ pub fn normalize_values(values: &[f64], top_n: usize) -> Result<ProcessingResult
             midpoint: 0.0,
             scale,
             top_n: count,
+        },
+    })
+}
+
+/// Connect two user-selected background regions, not the signal in between.
+/// Median representatives reduce isolated spikes; reference regions must have
+/// the same physical signal level for the inferred slope to be a background.
+pub fn remove_linear_background(
+    x: &[f64],
+    y: &[f64],
+    alive: &[bool],
+    left: [f64; 2],
+    right: [f64; 2],
+    zero_baseline: bool,
+) -> Result<ProcessingResult, ProcessingError> {
+    validate_xy(x, y, "linear_background")?;
+    if (!alive.is_empty() && alive.len() != x.len())
+        || left.into_iter().chain(right).any(|v| !v.is_finite())
+        || left[0] > left[1]
+        || right[0] > right[1]
+        || left[1] >= right[0]
+    {
+        return Err(ProcessingError::new(
+            "linear_background",
+            "invalid_interval",
+            "请选两个不重叠的参考区间，左区间在右区间之前",
+        ));
+    }
+    fn median(mut values: Vec<f64>) -> f64 {
+        values.sort_unstable_by(f64::total_cmp);
+        let n = values.len();
+        if n % 2 == 1 {
+            values[n / 2]
+        } else {
+            values[n / 2 - 1] / 2.0 + values[n / 2] / 2.0
+        }
+    }
+    let representative = |range: [f64; 2]| -> Result<([f64; 2], usize), ProcessingError> {
+        let points: Vec<_> = x
+            .iter()
+            .zip(y)
+            .enumerate()
+            .filter(|(i, (x, y))| {
+                (alive.is_empty() || alive[*i])
+                    && x.is_finite()
+                    && y.is_finite()
+                    && **x >= range[0]
+                    && **x <= range[1]
+            })
+            .map(|(_, (&x, &y))| (x, y))
+            .collect();
+        if points.is_empty() {
+            return Err(ProcessingError::new(
+                "linear_background",
+                "no_reference_points",
+                "参考区间没有保留的有效数据点，请扩大或重新选择区间",
+            ));
+        }
+        Ok((
+            [
+                median(points.iter().map(|p| p.0).collect()),
+                median(points.iter().map(|p| p.1).collect()),
+            ],
+            points.len(),
+        ))
+    };
+    let (a, n1) = representative(left)?;
+    let (b, n2) = representative(right)?;
+    let slope = (b[1] - a[1]) / (b[0] - a[0]);
+    if b[0] <= a[0] || !slope.is_finite() {
+        return Err(numeric_failure("linear_background"));
+    }
+    let mut values = y.to_vec();
+    for (i, (&x, &y)) in x.iter().zip(y).enumerate() {
+        if x.is_finite() && y.is_finite() {
+            values[i] = y - slope * (x - a[0]) - if zero_baseline { a[1] } else { 0.0 };
+            if !values[i].is_finite() {
+                return Err(numeric_failure("linear_background"));
+            }
+        }
+    }
+    Ok(ProcessingResult {
+        values,
+        metadata: ProcessingMetadata::LinearBackground {
+            left_anchor: a,
+            right_anchor: b,
+            counts: [n1, n2],
+            slope,
+            zero_baseline,
         },
     })
 }
@@ -625,6 +742,82 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
         .zip(right)
         .map(|(left, right)| left * right)
         .sum()
+}
+
+#[cfg(test)]
+mod linear_reference_tests {
+    use super::*;
+    #[test]
+    fn reference_windows_remove_known_slope_without_fitting_away_middle_peak() {
+        let x: Vec<f64> = (0..=10).map(f64::from).collect();
+        let signal: Vec<f64> = (0..=10)
+            .map(|i| if (2..=4).contains(&i) { 12.0 } else { 0.0 })
+            .collect();
+        let y: Vec<f64> = x
+            .iter()
+            .zip(&signal)
+            .map(|(x, s)| 5.0 + 2.0 * x + s)
+            .collect();
+        let zero = remove_linear_background(&x, &y, &[], [0.0, 1.0], [9.0, 10.0], true).unwrap();
+        for (a, b) in zero.values.iter().zip(&signal) {
+            assert!((a - b).abs() < 1e-12);
+        }
+        let anchored =
+            remove_linear_background(&x, &y, &[], [0.0, 1.0], [9.0, 10.0], false).unwrap();
+        for (a, b) in anchored.values.iter().zip(&signal) {
+            assert!((a - b - 6.0).abs() < 1e-12);
+        }
+        let whole = remove_polynomial_background(&x, &y, 0.0, 10.0, 1).unwrap();
+        assert!(
+            whole
+                .values
+                .iter()
+                .zip(&signal)
+                .any(|(a, b)| (a - b).abs() > 1.0)
+        );
+    }
+    #[test]
+    fn medians_and_alive_masks_resist_isolated_reference_spikes() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 9.0, 10.0];
+        let y = [10.0, 10.0, 10000.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+        let p = remove_linear_background(&x, &y, &[], [0.0, 4.0], [8.0, 10.0], true).unwrap();
+        assert_eq!(p.values[0], 0.0);
+        assert_eq!(p.values[2], 9990.0);
+        let alive = [true, true, false, true, true, true, true, true];
+        let p = remove_linear_background(&x, &y, &alive, [0.0, 2.0], [8.0, 10.0], true).unwrap();
+        assert!(matches!(
+            p.metadata,
+            ProcessingMetadata::LinearBackground {
+                counts: [2, 3],
+                slope: 0.0,
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn unsorted_missing_and_duplicate_values_keep_row_order_and_invalid_values() {
+        let x = [10.0, 0.0, 10.0, 0.0, f64::NAN, 4.0];
+        let y = [23.0, 3.0, 23.0, 3.0, 7.0, f64::NAN];
+        let p = remove_linear_background(&x, &y, &[], [0.0, 0.0], [10.0, 10.0], true).unwrap();
+        assert_eq!(&p.values[..4], &[0.0; 4]);
+        assert_eq!(p.values[4], 7.0);
+        assert!(p.values[5].is_nan());
+    }
+    #[test]
+    fn invalid_or_empty_reference_regions_fail_before_any_mutation() {
+        let x = [0.0, 1.0, 2.0];
+        let y = [1.0, 2.0, 3.0];
+        for (left, right) in [
+            ([0.0, 1.0], [1.0, 2.0]),
+            ([2.0, 3.0], [0.0, 1.0]),
+            ([0.1, 0.2], [1.1, 1.2]),
+            ([f64::NAN, 0.0], [1.0, 2.0]),
+        ] {
+            assert!(remove_linear_background(&x, &y, &[], left, right, false).is_err());
+        }
+        assert!(remove_linear_background(&x, &y, &[true], [0.0, 0.0], [2.0, 2.0], false).is_err());
+        assert_eq!(y, [1.0, 2.0, 3.0]);
+    }
 }
 
 fn numeric_failure(operation: &'static str) -> ProcessingError {
