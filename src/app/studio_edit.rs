@@ -8,12 +8,18 @@ pub(super) struct StudioEdit {
     last_poll: std::time::Instant,
     drafts: std::collections::BTreeMap<(String, String), PathBuf>,
     draft_files: Vec<PathBuf>,
+    activation_sequence: u64,
 }
 
 impl InstPlotLiteApp {
     pub(crate) fn open_studio_edit(&mut self, path: PathBuf) -> Result<(), String> {
         studio_edit_protocol::result_path(&path)?;
         let request = studio_edit_protocol::read_transfer(&path)?;
+        let activation_sequence = self
+            .studio_edit
+            .as_ref()
+            .filter(|e| e.request.session_id == request.session_id)
+            .map_or(0, |e| e.activation_sequence);
         let switching = self
             .studio_edit
             .as_ref()
@@ -100,6 +106,7 @@ impl InstPlotLiteApp {
             last_poll: std::time::Instant::now(),
             drafts,
             draft_files,
+            activation_sequence,
         });
         if restored.is_some() {
             self.status = "已恢复这条曲线未发回的草稿；原文件未覆盖。".to_owned();
@@ -219,6 +226,31 @@ impl InstPlotLiteApp {
             return;
         }
         edit.last_poll = std::time::Instant::now();
+        let activation = edit
+            .activation_sequence
+            .checked_add(1)
+            .and_then(|next| {
+                match studio_edit_protocol::read_activation(
+                    edit.request_path.parent()?,
+                    &edit.request.session_id,
+                    next,
+                ) {
+                    Ok(true) => {
+                        edit.activation_sequence = next;
+                        Some(true)
+                    }
+                    Ok(false) => Some(false),
+                    Err(e) => {
+                        self.status = format!("窗口唤起失败：{e}");
+                        Some(false)
+                    }
+                }
+            })
+            .unwrap_or(false);
+        if activation {
+            self.focus_studio_editor(context);
+        }
+        let edit = self.studio_edit.as_ref().unwrap();
         let Ok(path) = studio_edit_protocol::next_request_path(&edit.request_path) else {
             return;
         };
@@ -284,25 +316,30 @@ impl InstPlotLiteApp {
         }
         // Acknowledging an identical result keeps Lite's processing undo history.
         // Studio undo/redo (or switching dataset) replaces the editor baseline.
-        let unchanged = self.datasets.len() == 1
-            && self.datasets.first().is_some_and(|d| {
-                d.plot_id == request.target_id
-                    && d.alive == request.alive
-                    && d.columns.len() == request.columns.len()
-                    && d.columns.iter().zip(&request.columns).all(|(a, b)| {
-                        a.name == b.name
-                            && a.values
-                                .iter()
-                                .map(|v| v.is_finite().then_some(*v))
-                                .eq(b.values.iter().copied())
-                    })
-                    && d.columns
-                        .get(self.x_column)
-                        .is_some_and(|c| c.name == request.x_column)
-                    && d.columns
-                        .get(self.y_column)
-                        .is_some_and(|c| c.name == request.y_column)
-            });
+        let unchanged = self.datasets.get(self.active_dataset).is_some_and(|d| {
+            d.plot_id == request.target_id
+                && d.alive == request.alive
+                && d.columns.len() == request.columns.len()
+                && d.columns.iter().zip(&request.columns).all(|(a, b)| {
+                    a.name == b.name
+                        && a.values
+                            .iter()
+                            .map(|v| v.is_finite().then_some(*v))
+                            .eq(b.values.iter().copied())
+                })
+                && d.columns
+                    .get(self.x_column)
+                    .is_some_and(|c| c.name == request.x_column)
+                && d.columns
+                    .get(self.y_column)
+                    .is_some_and(|c| c.name == request.y_column)
+        });
+        let only_bound_dataset = self.datasets.len() == 1
+            && self.datasets[0].plot_id == self.studio_edit.as_ref().unwrap().request.target_id;
+        if !unchanged && !only_bound_dataset {
+            self.status="此联动窗口还打开了其他数据，已暂停同步以保护编辑；请先导出并关闭额外数据，或使用独立 Lite 窗口。".to_owned();
+            return;
+        }
         if unchanged {
             let edit = self.studio_edit.as_mut().unwrap();
             edit.request_path = path;
@@ -340,6 +377,19 @@ impl InstPlotLiteApp {
             }
         }
         context.request_repaint();
+    }
+
+    fn focus_studio_editor(&self, context: &egui::Context) {
+        let target = if self.processing_open {
+            processing_viewport_id()
+        } else if self.fit_open {
+            fitting_viewport_id()
+        } else {
+            egui::ViewportId::ROOT
+        };
+        context.send_viewport_cmd_to(target, egui::ViewportCommand::Visible(true));
+        focus_viewport(context, target);
+        context.request_repaint_of(target);
     }
 }
 
@@ -403,6 +453,27 @@ mod tests {
         app.active_dataset = 0;
         app.datasets[0].columns[1].values[1] = 8.5;
         app.datasets[0].alive[0] = false;
+        // Explicit re-open raises only this session, without a data revision:
+        // unsent values/masks and its open processing window must survive.
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        studio_edit_protocol::write_activation(&root, &request.session_id, 1).unwrap();
+        app.studio_edit.as_mut().unwrap().last_poll =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let mut output = context.run_ui(egui::RawInput::default(), |_| {
+            app.poll_studio_edit(&context)
+        });
+        output.textures_delta.clear();
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::Focus)
+        );
+        assert_eq!(app.datasets[0].columns[1].values[1], 8.5);
+        assert!(!app.datasets[0].alive[0]);
+        assert_eq!(app.studio_edit.as_ref().unwrap().request_path, path);
+        assert_eq!(app.studio_edit.as_ref().unwrap().activation_sequence, 1);
+        assert!(!root.join("request-1.json").exists());
         app.send_studio_edit().unwrap();
         let result = studio_edit_protocol::read_transfer(&root.join("result.json")).unwrap();
         assert!(result.matches_session(&request));
@@ -423,7 +494,8 @@ mod tests {
             std::time::Instant::now() - std::time::Duration::from_secs(1);
         app.poll_studio_edit(&context);
         assert!(!app.studio_edit.as_ref().unwrap().sent);
-        assert_eq!(app.datasets.len(), 1);
+        assert_eq!(app.datasets.len(), 2);
+        assert_eq!(app.datasets[1].plot_id, "unrelated");
         app.send_studio_edit().unwrap();
         let second_result =
             studio_edit_protocol::read_transfer(&studio_edit_protocol::result_path(&next).unwrap())
@@ -433,6 +505,22 @@ mod tests {
         // remain immutable and cannot be silently reapplied.
         let undo_path = studio_edit_protocol::next_request_path(&next).unwrap();
         studio_edit_protocol::write_transfer(&undo_path, &request).unwrap();
+        app.studio_edit.as_mut().unwrap().last_poll =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.poll_studio_edit(&context);
+        assert_eq!(app.studio_edit.as_ref().unwrap().request_path, next);
+        assert_eq!(app.datasets.len(), 2);
+        assert_eq!(app.datasets[0].columns[1].values[1], 8.5);
+        assert!(app.status.contains("已暂停同步"));
+        // Removing the additional dataset explicitly allows the queued update.
+        app.datasets.remove(1);
+        app.datasets[0].plot_id = "foreign-only".into();
+        app.studio_edit.as_mut().unwrap().last_poll =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        app.poll_studio_edit(&context);
+        assert_eq!(app.datasets[0].plot_id, "foreign-only");
+        assert_eq!(app.studio_edit.as_ref().unwrap().request_path, next);
+        app.datasets[0].plot_id = request.target_id.clone();
         app.studio_edit.as_mut().unwrap().last_poll =
             std::time::Instant::now() - std::time::Duration::from_secs(1);
         app.poll_studio_edit(&context);
@@ -502,6 +590,7 @@ mod tests {
         }
         std::fs::remove_file(root.join("result.json")).unwrap();
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(root.join("activate-1")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
 }

@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-pub const CAPABILITY: &str = "INSTPLOT_STUDIO_EDIT_PROTOCOL_V2";
+pub const CAPABILITY: &str = "INSTPLOT_STUDIO_EDIT_PROTOCOL_V3";
 pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Each revision is immutable; never overwrite a request that Lite is reading.
@@ -128,6 +128,13 @@ impl Transfer {
 }
 
 pub fn read_transfer(path: &Path) -> Result<Transfer, String> {
+    let bytes = read_private_bytes(path, MAX_BYTES)?;
+    let transfer: Transfer = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    transfer.validate()?;
+    Ok(transfer)
+}
+
+fn read_private_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let parent = path.parent().ok_or("missing edit directory")?;
     if parent.canonicalize().map_err(|e| e.to_string())? != parent
         || fs::symlink_metadata(parent)
@@ -138,7 +145,7 @@ pub fn read_transfer(path: &Path) -> Result<Transfer, String> {
         return Err("edit directory must be canonical and not a link".to_owned());
     }
     let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+    if !metadata.is_file() || metadata.len() > limit {
         return Err("edit transfer must be a bounded regular file".to_owned());
     }
     #[cfg(unix)]
@@ -157,15 +164,13 @@ pub fn read_transfer(path: &Path) -> Result<Transfer, String> {
     let mut bytes = Vec::new();
     fs::File::open(path)
         .map_err(|e| e.to_string())?
-        .take(MAX_BYTES + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > limit {
         return Err("edit transfer too large".to_owned());
     }
-    let transfer: Transfer = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    transfer.validate()?;
-    Ok(transfer)
+    Ok(bytes)
 }
 
 /// Publish complete bytes once. A failed/repeated send never overwrites a result.
@@ -175,6 +180,39 @@ pub fn write_transfer(path: &Path, transfer: &Transfer) -> Result<(), String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("edit transfer too large".to_owned());
     }
+    publish_bytes(path, &bytes)
+}
+
+/// Session-scoped activation is separate from data revisions: raising an
+/// existing window must never reload its baseline or discard unsent edits.
+#[allow(dead_code)] // Mirrored protocol: used by the Studio sender, tested by both.
+pub fn write_activation(root: &Path, session: &str, sequence: u64) -> Result<(), String> {
+    if session.len() != 64 || !session.bytes().all(|c| c.is_ascii_hexdigit()) || sequence == 0 {
+        return Err("invalid activation identity".into());
+    }
+    publish_bytes(
+        &root.join(format!("activate-{sequence}")),
+        session.as_bytes(),
+    )
+}
+
+#[allow(dead_code)] // Mirrored protocol: used by the Lite receiver, tested by both.
+pub fn read_activation(root: &Path, session: &str, sequence: u64) -> Result<bool, String> {
+    let path = root.join(format!("activate-{sequence}"));
+    if let Err(e) = fs::symlink_metadata(&path) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return Ok(false);
+        }
+        return Err(e.to_string());
+    }
+    let bytes = read_private_bytes(&path, 64)?;
+    if bytes != session.as_bytes() {
+        return Err("activation session mismatch".into());
+    }
+    Ok(true)
+}
+
+fn publish_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let part = path.with_extension("partial");
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -185,7 +223,7 @@ pub fn write_transfer(path: &Path, transfer: &Transfer) -> Result<(), String> {
     }
     let mut file = options.open(&part).map_err(|e| e.to_string())?;
     let result = (|| {
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         fs::hard_link(&part, path)?;
@@ -294,6 +332,30 @@ mod file_tests {
         builder.create(&root).unwrap();
         root
     }
+    #[test]
+    fn activation_is_private_session_scoped_immutable_and_bounded() {
+        let a = root();
+        let b = root();
+        let id = "a".repeat(64);
+        write_activation(&a, &id, 1).unwrap();
+        assert!(read_activation(&a, &id, 1).unwrap());
+        assert!(!read_activation(&b, &id, 1).unwrap());
+        assert!(!read_activation(&a, &id, 2).unwrap());
+        assert!(read_activation(&a, &"b".repeat(64), 1).is_err());
+        assert!(write_activation(&a, &id, 1).is_err());
+        assert!(write_activation(&a, &id, 0).is_err());
+        assert!(write_activation(&a, "bad", 2).is_err());
+        fs::write(a.join("activate-2"), vec![b'a'; 65]).unwrap();
+        assert!(read_activation(&a, &id, 2).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(a.join("activate-1"), a.join("activate-3")).unwrap();
+            assert!(read_activation(&a, &id, 3).is_err());
+        }
+        fs::remove_dir_all(a).unwrap();
+        fs::remove_dir_all(b).unwrap();
+    }
+
     #[test]
     fn complete_file_publishes_once_rejects_links_and_bad_json() {
         let root = root();
