@@ -121,7 +121,13 @@ pub(crate) fn show(
         context,
         fitting_viewport_id(),
         egui::ViewportBuilder::default()
-            .with_title("InstPlot Lite · 曲线拟合")
+            .with_title(format!(
+                "InstPlot Lite · 曲线拟合 — {}",
+                dataset_names
+                    .get(active_dataset)
+                    .map(String::as_str)
+                    .unwrap_or("无数据")
+            ))
             .with_inner_size([620.0, 520.0])
             .with_min_inner_size([560.0, 470.0])
             .with_resizable(true),

@@ -124,6 +124,36 @@ on first launch. Checksums are published with the release notes.
   a derived column, and can target the current curve or an explicit
   multi-selection. Local flattening removes the fitted linear slope inside a
   chosen X interval while preserving the selected anchor position.
+  **智能线性去背景** defaults to a no-segmentation preview. It jointly fits a
+  straight trend and a sinusoid using weighted QR / Huber reweighting, searching
+  1.5–6 cycles over the actual X span (at least 12 sampled points per cycle).
+  The reported period uses original X units; no degree or physical-unit
+  assumption is made from a filename. Only finite, alive points estimate the
+  model. The fit is deterministically bounded to 1500 sampled points; correction
+  retains every row. A weak periodic model, boundary optimum, degenerate X or
+  insufficient points rejects the operation without modifying any curve.
+  The model must improve trimmed residual loss over a robust straight-line fit
+  and have clear periodic amplitude. This is a heuristic suitability gate, not
+  a statistical confidence interval or proof of physical background. Preview
+  shows the estimated line, corrected signal, period, drift and residual scale;
+  small drift is explicitly flagged. Default correction subtracts only slope
+  about minimum X, optional zeroing also removes the model's constant baseline.
+  Applying requires a fresh preview with identical target, values, masks and
+  columns; batch processing is atomic and rejects all if any target fails.
+  **高级：手动参考区** optionally connects the median X/Y representatives
+  of two non-overlapping user-selected reference windows. Only finite, alive
+  points estimate the background; row order and missing values are retained.
+  The references must represent the same physical signal state (for angular
+  sweeps, the same phase), not a peak and a valley. Endpoint 5% windows are only
+  initial suggestions, not automatic baseline detection. Default correction
+  subtracts only the slope about the left representative; optional zeroing
+  also subtracts its Y level. The user must preview the original/background
+  and corrected curve before applying. Changes to data, columns, masks or
+  parameters invalidate the preview. Batch correction remains atomic and
+  undoable; each selected curve estimates its own reference line. This mode
+  is not a generic automatic baseline detector or a substitute for checking
+  whether the reference regions contain real signal. Existing interval-wide
+  polynomial fitting remains available as an advanced mode (default degree 1).
 - Click **曲线拟合** for polynomial (degree 1–10), exponential, logarithmic,
   power-law, or custom-expression fitting. The movable fit window supports the
   active curve or an explicit multi-selection whose curves are fitted

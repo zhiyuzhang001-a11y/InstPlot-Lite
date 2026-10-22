@@ -30,6 +30,8 @@ instplot-io = { path = "crates/instplot-io" }
 instplot-processing = { path = "crates/instplot-processing" }
 png = "0.18.0"
 rfd = "0.17.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
 
 [target.'cfg(windows)'.dependencies]
 ed25519-dalek = "3.0.0"

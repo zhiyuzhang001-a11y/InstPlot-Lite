@@ -9,6 +9,7 @@ mod fonts;
 mod image_export;
 mod processing;
 mod session;
+mod studio_edit_protocol;
 mod ui;
 #[cfg(any(target_os = "windows", test))]
 mod updater;
@@ -17,6 +18,10 @@ use app::InstPlotLiteApp;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    if std::env::args_os().any(|arg| arg == "--studio-bridge-info") {
+        println!("{}", studio_edit_protocol::CAPABILITY);
+        return Ok(());
+    }
     let arguments = startup_arguments();
     #[cfg(all(target_os = "windows", feature = "updater-e2e"))]
     if let Some(status_path) = &arguments.updater_e2e_status {
@@ -74,11 +79,12 @@ fn main() -> eframe::Result {
         "InstPlot Lite",
         options,
         Box::new(move |creation_context| {
-            Ok(Box::new(InstPlotLiteApp::new(
-                creation_context,
-                arguments.files,
-                arguments.screenshot,
-            )))
+            let mut app =
+                InstPlotLiteApp::new(creation_context, arguments.files, arguments.screenshot);
+            if let Some(path) = arguments.studio_edit {
+                app.open_studio_edit(path).map_err(std::io::Error::other)?;
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -108,6 +114,7 @@ fn application_icon() -> eframe::egui::IconData {
 }
 
 struct StartupArguments {
+    studio_edit: Option<PathBuf>,
     files: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
     check_only: bool,
@@ -116,6 +123,7 @@ struct StartupArguments {
 }
 
 fn startup_arguments() -> StartupArguments {
+    let mut studio_edit = None;
     let mut files = Vec::new();
     let mut screenshot = None;
     let mut check_only = false;
@@ -123,7 +131,13 @@ fn startup_arguments() -> StartupArguments {
     let mut updater_e2e_status = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
-        if argument == "--open" {
+        if argument == "--studio-edit" {
+            studio_edit = arguments.next().map(PathBuf::from);
+            if studio_edit.is_none() {
+                eprintln!("--studio-edit requires request.json");
+                std::process::exit(2);
+            }
+        } else if argument == "--open" {
             if let Some(path) = arguments.next() {
                 files.push(PathBuf::from(path));
             }
@@ -146,6 +160,7 @@ fn startup_arguments() -> StartupArguments {
         }
     }
     StartupArguments {
+        studio_edit,
         files,
         screenshot,
         check_only,
