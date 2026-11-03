@@ -1,8 +1,11 @@
 # 当前项目状态
 
+> [!NOTE]
+> 下方是当时的开发记录。当前公开预览版和安装包请查看 [v0.3.9 发布页](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.9)。
+
 - 更新日期：`2026-09-17`
 - 当前产品：`InstPlot Lite`
-- 当前公开版本：`v0.3.2 未签名预览版`
+- 记录时的公开版本：`v0.3.2 未签名预览版`
 - 当前主线：Rust 原生桌面应用，Windows / macOS / Linux 安装包
 - 旧 Python 版：已迁移到独立源码归档仓库，不再打包或作为普通用户安装入口
 
