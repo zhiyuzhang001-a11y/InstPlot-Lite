@@ -1,5 +1,8 @@
 # InstPlot Lite status
 
+> [!NOTE]
+> The dated development record below describes v0.3.8. See the [v0.3.9 release](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.9) for the newer public preview and its installers.
+
 Updated: 2026-09-29
 
 > [!NOTE]

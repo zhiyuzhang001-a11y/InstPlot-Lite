@@ -1,4 +1,23 @@
-# InstPlot Lite — 轻量实验数据绘图工具
+# InstPlot Lite
+
+InstPlot Lite is a native Rust desktop tool for checking experimental curves, cleaning
+numeric data, fitting a curve, and exporting the result locally. The current
+published preview is [v0.3.9](https://github.com/zhiyuzhang001-a11y/InstPlot-Lite/releases/tag/v0.3.9),
+with installers for Windows x64, Apple Silicon macOS, and Linux x86-64.
+
+**Try the workflow:** Install the matching asset from the release, open the bundled
+[numeric text fixture](tests/fixtures/smoke.csv), then choose the dataset and its
+X/Y columns. Inspect the curve, try a reversible edit, and export a PNG or data file
+to a new location. Check the exported data separately from the plot preview.
+
+![InstPlot Lite showing a dataset, X and Y selectors, and a plotted curve](docs/images/instplot-lite-main.png)
+
+*Existing repository capture of the plotting workflow. The fixture linked above
+is a separate sample. The screenshot does not establish the release build or
+platform validation status.*
+
+See the Chinese installation and feature guide below for asset names and unsigned
+preview limitations. The [status notes](STATUS.md) retain dated milestones.
 
 <div align="center">
 
@@ -27,8 +46,6 @@ InstPlot Lite 面向需要快速查看实验数据的学生和科研人员。它
 项目最初有一个功能完整的 Python 版本。为了让不熟悉编程的用户也能直接安装，并降低磁盘、内存和启动开销，我们使用 Rust 重新实现了 Lite 版。Lite 版保留最常用的交互和数据处理能力，但不以出版级绘图排版为目标。
 
 所有数据处理都在本机完成；InstPlot Lite 本身不会上传实验数据。
-
-![InstPlot Lite 主界面](docs/images/instplot-lite-main.png)
 
 ## 下载与安装
 
